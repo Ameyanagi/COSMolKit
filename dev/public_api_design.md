@@ -112,6 +112,14 @@ changing its semantic name.
 
 ### 4.1 Constructors
 
+The top-level public `BioStructure` and `Protein` use associated constructors
+`from_pdb`, `from_pdb_with_params` and `from_mmcif`. Their detached data stays
+in BIO and their parsers stay in IO; do not replace these constructors with
+model-prefixed module functions or add inherent IO methods to a foreign type.
+Both objects' in-place operations use the trailing underscore and their
+value-style counterparts leave the input unchanged, through the single
+lightweight BIO operation declaration described in [BIO architecture](./bio_architecture.md).
+
 Use `from_*` for constructors that create a `Molecule` or another owned value:
 
 ```text

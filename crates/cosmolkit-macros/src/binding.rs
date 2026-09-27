@@ -445,8 +445,13 @@ fn validate_callable(
             "Python callable name must equal the canonical Rust name",
         ));
     }
+    let structural_object =
+        owner == Owner::Type
+            && rust.segments.iter().rev().nth(1).is_some_and(|segment| {
+                segment.ident == "BioStructure" || segment.ident == "Protein"
+            });
     let requires_trailing_underscore =
-        owner == Owner::Molecule && payload.state == StateModel::InPlace;
+        (owner == Owner::Molecule || structural_object) && payload.state == StateModel::InPlace;
     if rust_name.ends_with('_') != requires_trailing_underscore {
         return Err(syn::Error::new_spanned(
             rust,
@@ -529,6 +534,16 @@ fn validate_signature(owner: Owner, rust: &Path, payload: &CallablePayload) -> s
                 match payload.state {
                     StateModel::InPlace => syn::parse_quote!(&mut #receiver_path),
                     StateModel::ReadOnly => syn::parse_quote!(&#receiver_path),
+                    // BIO public objects, like Molecule, preserve the receiver
+                    // when producing a new COW value. Ordinary value types
+                    // retain their existing consuming-receiver contract.
+                    StateModel::ValueReturning
+                        if receiver_path.segments.last().is_some_and(|segment| {
+                            segment.ident == "BioStructure" || segment.ident == "Protein"
+                        }) =>
+                    {
+                        syn::parse_quote!(&#receiver_path)
+                    }
                     StateModel::ValueReturning => syn::parse_quote!(#receiver_path),
                 }
             }

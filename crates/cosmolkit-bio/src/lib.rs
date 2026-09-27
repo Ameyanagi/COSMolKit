@@ -14,9 +14,11 @@ pub use hierarchy::{
     BioAssemblyOperator, BioAssemblySpecialKind, BioAtomId, BioAtomRow, BioCalcFlag, BioChainId,
     BioChainRow, BioCoordinateBlock, BioCoordinateFormat, BioCrystalCell, BioCrystalInfo,
     BioEntityDbRef, BioEntityId, BioEntityRow, BioModelId, BioModelRow, BioNcsOperator,
-    BioResidueId, BioResidueRow, BioRowSpan, BioSiftsUnpResidue, BioStructure, BioStructureError,
-    BioStructureParts, BioTransform, ChainKind, EntityKind, PolymerKind, ResidueKind,
-    altloc_matches, is_same_conformer,
+    BioNearestImage, BioResidueId, BioResidueRow, BioRowSpan, BioSiftsUnpResidue, BioStructureData,
+    BioStructureError, BioStructureParts, BioTransform, ChainKind, EntityKind, PolymerKind,
+    ResidueKind, altloc_matches, find_nearest_image, is_same_conformer, set_crystal_cell,
+    set_crystal_fractional_transform, set_crystal_space_group_hm, set_crystal_z_pdb_if_nonempty,
+    setup_cell_images,
 };
 pub use metadata::{
     BioBasicRefinementInfo, BioDiffractionInfo, BioExperimentInfo, BioExperimentalCrystalInfo,
@@ -24,7 +26,7 @@ pub use metadata::{
     BioSoftwareClassification, BioSoftwareItem, BioTlsGroup, BioTlsSelection,
 };
 pub use protein::{
-    Protein, ProteinAtomRef, ProteinChainRef, ProteinProjectionError, ProteinResidueRef,
+    ProteinAtomRef, ProteinChainRef, ProteinData, ProteinProjectionError, ProteinResidueRef,
 };
 pub use relationships::{
     AtomAddress, BioAsu, BioCisPep, BioConnection, BioConnectionKind, BioModRes, ResidueAddress,
@@ -42,6 +44,17 @@ pub use source_ids::{
 pub use structure_metadata::BioStructureSourceState;
 
 use cosmolkit_model::TopologyBlock;
+
+/// Translate coordinate rows only; metadata and anisotropic tensors are unchanged.
+pub fn translate_coordinates(coordinates: &mut BioCoordinateBlock, offset: [f64; 3]) {
+    // Project-defined coordinate-only translation. No full Gemmi structure
+    // transformation or metadata rewrite is claimed. One pass, O(n), no allocation.
+    for position in coordinates.positions_mut() {
+        for axis in 0..3 {
+            position[axis] += offset[axis];
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BioError {

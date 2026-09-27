@@ -1,8 +1,9 @@
 //! Small Rust-owned parity pilot; no performance or binding claims.
 pub mod execute;
+pub mod molecular;
 pub mod registry;
 
-use registry::{Input, Pair, RDKIT_VERSION, Record, Task};
+use registry::{Corpus, Input, RDKIT_VERSION, Record, Task};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -35,11 +36,45 @@ fn read(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-pub fn corpus(path: Option<&Path>) -> Result<Vec<Pair>> {
-    match path {
-        None => Ok(registry::builtin()),
-        Some(p) => serde_json::from_slice(&read(p)?).map_err(|e| format!("{}: {e}", p.display())),
+pub fn corpus(path: Option<&Path>, tasks: &[&Task]) -> Result<Corpus> {
+    let fingerprint_tasks = tasks
+        .iter()
+        .any(|t| !matches!(t.operation, registry::Operation::Molecular(_)));
+    let molecular_tasks = tasks
+        .iter()
+        .any(|t| matches!(t.operation, registry::Operation::Molecular(_)));
+    let mut corpus = Corpus::default();
+    let default = root().join("testdata/smiles/corpus/smiles_small.smi");
+    let is_json = path.is_some_and(|p| p.extension().is_some_and(|ext| ext == "json"));
+    if path.is_some() && ((is_json && !fingerprint_tasks) || (!is_json && !molecular_tasks)) {
+        return Err("selected tasks do not consume the supplied corpus input family".into());
     }
+    if fingerprint_tasks {
+        corpus.fingerprints = if is_json {
+            serde_json::from_slice(&read(path.unwrap())?).map_err(|e| e.to_string())?
+        } else {
+            registry::builtin()
+        };
+    }
+    if molecular_tasks {
+        corpus.molecules = molecular::read_corpus(if is_json {
+            &default
+        } else {
+            path.unwrap_or(&default)
+        })?;
+    }
+    Ok(corpus)
+}
+
+fn registry_digest() -> String {
+    digest(
+        concat!(
+            include_str!("registry.rs"),
+            include_str!("registry/molecule_plan.rs"),
+            include_str!("molecular.rs")
+        )
+        .as_bytes(),
+    )
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,6 +83,7 @@ struct Manifest {
     schema: u32,
     task: String,
     rdkit_version: String,
+    reference_platform: String,
     registry_sha256: String,
     oracle_sha256: String,
     input_sha256: String,
@@ -57,10 +93,11 @@ struct Manifest {
 
 fn identity(task: &Task, input: &[u8], reference: &[u8], rows: usize) -> Manifest {
     Manifest {
-        schema: 1,
+        schema: 2,
         task: task.operation.name().into(),
         rdkit_version: RDKIT_VERSION.into(),
-        registry_sha256: digest(include_bytes!("registry.rs")),
+        reference_platform: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+        registry_sha256: registry_digest(),
         oracle_sha256: digest(ORACLE.as_bytes()),
         input_sha256: digest(input),
         reference_sha256: digest(reference),
@@ -76,12 +113,22 @@ fn check_records(inputs: &[Input], records: &[Record]) -> Result<()> {
         if input != &record.input {
             return Err("reference case/operation/width mismatch".into());
         }
-        let entries = &record.output.entries;
-        if record.output.length != input.case.length
-            || entries.windows(2).any(|w| w[0].0 >= w[1].0)
-            || entries.iter().any(|&(key, _)| key >= input.case.length)
+        if let (Input::Fingerprint(input), registry::Value::Fingerprint(output)) =
+            (input, &record.output)
         {
-            return Err(format!("{}: malformed reference output", input.case.id));
+            let entries = &output.entries;
+            if output.length != input.case.length
+                || entries.windows(2).any(|w| w[0].0 >= w[1].0)
+                || entries.iter().any(|&(key, _)| key >= input.case.length)
+            {
+                return Err(format!("{}: malformed reference output", input.case.id));
+            }
+        } else if let (Input::Molecular { profile, .. }, registry::Value::Molecular(output)) =
+            (input, &record.output)
+        {
+            molecular::validate_output(profile, output)?;
+        } else {
+            return Err("reference input/output kind mismatch".into());
         }
     }
     Ok(())
@@ -123,19 +170,19 @@ pub struct Preparation {
 
 /// Reuse verified references and prepare missing or invalid generations.
 /// Ordinary cargo tests inject a synthetic generator, never the real oracle.
-pub fn prepare(tasks: &[&Task], cases: &[Pair], data: &Path, python: &Path) -> Result<Preparation> {
+pub fn prepare(tasks: &[&Task], cases: &Corpus, data: &Path, python: &Path) -> Result<Preparation> {
     ensure_ready_with(tasks, cases, data, |inputs| oracle(inputs, python))
         .map(|(_, preparation)| preparation)
 }
 
 fn ensure_ready_with(
     tasks: &[&Task],
-    cases: &[Pair],
+    cases: &Corpus,
     data: &Path,
     mut generate: impl FnMut(&[Input]) -> Result<Vec<Record>>,
 ) -> Result<(Ready, Preparation)> {
     registry::validate(cases, tasks)?;
-    if tasks.is_empty() || tasks.iter().any(|task| task.widths.is_empty()) {
+    if tasks.is_empty() {
         return Err("empty task/width selection; 0 Rust operation calls".into());
     }
     fs::create_dir_all(data).map_err(|e| e.to_string())?;
@@ -233,7 +280,7 @@ fn generation(data: &Path, task: &Task, input: &[u8]) -> PathBuf {
         "{}{}{}",
         digest(input),
         digest(ORACLE.as_bytes()),
-        digest(include_bytes!("registry.rs"))
+        registry_digest()
     );
     data.join(format!(
         "{}-{}",
@@ -257,7 +304,7 @@ impl Ready {
 
 /// Load and validate EVERY selected task before returning any executable work.
 /// Owned snapshots prevent input changes after preflight affecting this run.
-pub fn preflight(tasks: &[&Task], cases: &[Pair], data: &Path) -> Result<Ready> {
+pub fn preflight(tasks: &[&Task], cases: &Corpus, data: &Path) -> Result<Ready> {
     registry::validate(cases, tasks)?;
     let mut all = Vec::new();
     let mut errors = Vec::new();
@@ -302,7 +349,7 @@ pub struct Comparison {
     pub matches: bool,
 }
 
-/// Type equality compares all fields; no per-operation hand-written diff rules.
+/// Exact typed comparison, except the registry's declared 2D numeric tolerance.
 pub fn compare(ready: Ready, mut run: impl FnMut(&Input) -> Result<Record>) -> Vec<Comparison> {
     ready
         .records
@@ -314,7 +361,12 @@ pub fn compare(ready: Ready, mut run: impl FnMut(&Input) -> Result<Record>) -> V
                 }
                 Ok(record.output)
             });
-            let matches = actual.as_ref() == Ok(&reference.output);
+            let matches = match (&reference.output, &actual) {
+                (registry::Value::Molecular(expected), Ok(registry::Value::Molecular(actual))) => {
+                    molecular::matches(expected, actual)
+                }
+                _ => actual.as_ref() == Ok(&reference.output),
+            };
             Comparison {
                 input: reference.input,
                 expected: reference.output,
@@ -327,7 +379,7 @@ pub fn compare(ready: Ready, mut run: impl FnMut(&Input) -> Result<Record>) -> V
 
 pub fn run(
     tasks: &[&Task],
-    cases: &[Pair],
+    cases: &Corpus,
     data: &Path,
     python: &Path,
     executor: impl FnMut(&Input) -> Result<Record>,
@@ -343,7 +395,7 @@ pub fn run(
 
 fn run_with(
     tasks: &[&Task],
-    cases: &[Pair],
+    cases: &Corpus,
     data: &Path,
     generate: impl FnMut(&[Input]) -> Result<Vec<Record>>,
     executor: impl FnMut(&Input) -> Result<Record>,

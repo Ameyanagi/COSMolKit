@@ -5141,6 +5141,8 @@ fn v3k_mass_integer_fractional_and_integer_conversion_edges_are_source_shaped() 
     // and only falls back to toDouble/floor after the integer character screen
     // throws. Thus leading plus and signed-int overflow retain toInt's zero,
     // while a decimal point selects the floating fallback.
+    // Concrete setIsotope(0) uses the source's unspecified-isotope sentinel;
+    // the detached model projects that value to None, unlike query Isotope(0).
     let block = v3000_block(
         &[
             "M  V30 1 C 0 0 0 0 MASS=13",
@@ -5164,7 +5166,7 @@ fn v3k_mass_integer_fractional_and_integer_conversion_edges_are_source_shaped() 
         .collect::<Vec<_>>();
     assert_eq!(
         isotopes,
-        [Some(13), Some(13), Some(0), Some(0), Some(14), Some(1)]
+        [Some(13), Some(13), None, None, Some(14), Some(1)]
     );
 }
 

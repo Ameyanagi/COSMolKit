@@ -6,6 +6,40 @@ use cosmolkit::{
 };
 
 #[test]
+fn default_reader_sanitizes_kekule_benzene_without_explicit_hydrogens() {
+    let molecule = Molecule::from_smiles("C1=CC=CC=C1").unwrap();
+    assert_eq!(molecule.num_atoms(), 6);
+    assert!(molecule.atoms().iter().all(|atom| atom.is_aromatic()));
+    assert!(molecule.bonds().iter().all(|bond| bond.is_aromatic()));
+    for sanitize in [false, true] {
+        for remove_hydrogens in [false, true] {
+            let molecule = Molecule::from_smiles_with_params(
+                "C1=CC=CC=C1",
+                &SmilesParseParams {
+                    sanitize,
+                    remove_hydrogens,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(molecule.num_atoms(), 6);
+            assert!(
+                molecule
+                    .atoms()
+                    .iter()
+                    .all(|atom| atom.is_aromatic() == sanitize)
+            );
+            assert!(
+                molecule
+                    .bonds()
+                    .iter()
+                    .all(|bond| bond.is_aromatic() == sanitize)
+            );
+        }
+    }
+}
+
+#[test]
 fn public_default_and_parameterized_constructors_are_directly_callable() {
     let short: fn(&str) -> Result<Molecule, SmilesError> = Molecule::from_smiles;
     let configured: for<'a, 'b> fn(

@@ -291,6 +291,7 @@ fn operation_defined_allow_list_is_exact() {
 }
 
 #[test]
+#[cfg(any(feature = "valence", feature = "hydrogens"))]
 fn update_and_clear_change_only_declared_cache_bits() {
     let source = molecule_with_valid(DerivedState::RINGS.union(DerivedState::DRAWING));
     let operation = spec(

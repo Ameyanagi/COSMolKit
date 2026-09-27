@@ -13,7 +13,7 @@ fn entry() -> Result<(), String> {
     let command = args.next().unwrap_or_else(|| "help".into());
     if command == "help" || command == "--help" {
         println!(
-            "run | prepare | preflight | list\n  run automatically prepares missing/invalid references before global preflight\n  --task fuzzy_and|fuzzy_or (default: both)\n  --corpus FILE (default: builtin branch corpus)\n  --data DIR (default: target/parity-tests)\n  --python PATH (run/prepare; default: .venv/bin/python)\nNo Python/JS binding or performance verification in this pilot."
+            "run | prepare | preflight | list\n  run automatically prepares missing/invalid references before global preflight\n  --task NAME (default: all executable tasks; see list)\n  --corpus FILE (.smi molecular records or .json fingerprint pairs; other family keeps its default)\n  --data DIR (default: target/parity-tests)\n  --python PATH (run/prepare; default: .venv/bin/python)\nNo Python/JS binding or performance verification."
         );
         return Ok(());
     }
@@ -41,16 +41,10 @@ fn entry() -> Result<(), String> {
         }
     }
     let tasks = registry::select(task.as_deref())?;
-    let cases = pilot::corpus(corpus.as_deref())?;
+    let cases = pilot::corpus(corpus.as_deref(), &tasks)?;
     registry::validate(&cases, &tasks)?;
     for t in &tasks {
-        println!(
-            "{}: {} inputs x {:?} = {} cases",
-            t.operation.name(),
-            cases.len(),
-            t.widths,
-            cases.len() * t.widths.len()
-        );
+        println!("{}: {} cases", t.operation.name(), t.count(&cases));
     }
     match command.as_str() {
         "list" => {}
@@ -67,6 +61,18 @@ fn entry() -> Result<(), String> {
             let failed = report.iter().filter(|row| !row.matches).count();
             let output = data.join("rust-report.json");
             pilot::write_report(&output, &report)?;
+            for task in &tasks {
+                let selected: Vec<_> = report
+                    .iter()
+                    .filter(|row| row.input.task_name() == task.operation.name())
+                    .collect();
+                println!(
+                    "{}: {}/{} matched",
+                    task.operation.name(),
+                    selected.iter().filter(|row| row.matches).count(),
+                    selected.len()
+                );
+            }
             println!(
                 "{} compared, {} failed; {}",
                 report.len(),

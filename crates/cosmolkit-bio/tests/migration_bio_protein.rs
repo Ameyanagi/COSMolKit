@@ -2,7 +2,7 @@ use cosmolkit_bio::{
     AltLocLabel, AtomName, AtomSourceIds, BioAssembly, BioAssemblySpecialKind, BioAtomId,
     BioAtomRow, BioCalcFlag, BioChainId, BioChainRow, BioCoordinateBlock, BioCoordinateFormat,
     BioCrystalCell, BioCrystalInfo, BioEntityId, BioEntityRow, BioModelId, BioModelRow,
-    BioNcsOperator, BioResidueId, BioResidueRow, BioRowSpan, BioSiftsUnpResidue, BioStructure,
+    BioNcsOperator, BioResidueId, BioResidueRow, BioRowSpan, BioSiftsUnpResidue, BioStructureData,
     BioStructureError, BioStructureParts, BioTransform, ChainKind, ChainSourceIds, EntityKind,
     EntitySourceIds, PdbAtomSerial, PdbChainId, PdbSeqId, PolymerKind, ProteinProjectionError,
     ResidueCode, ResidueInfoKind, ResidueKind, ResidueName, ResidueSourceIds,
@@ -13,8 +13,8 @@ fn span<I>(start: u32, len: u32) -> BioRowSpan<I> {
     BioRowSpan::new(start, len).unwrap()
 }
 
-fn atom_name(value: &[u8; 4]) -> AtomName {
-    AtomName::from_ascii(*value).unwrap()
+fn atom_name(value: &[u8]) -> AtomName {
+    AtomName::from_ascii(value).unwrap()
 }
 
 fn residue_name(value: &str) -> ResidueName {
@@ -73,9 +73,13 @@ fn residue(
 }
 
 fn atom(residue_id: u32, altloc: Option<u8>, serial: i32) -> BioAtomRow {
+    atom_named(residue_id, altloc, serial, b" CA ")
+}
+
+fn atom_named(residue_id: u32, altloc: Option<u8>, serial: i32, name: &[u8]) -> BioAtomRow {
     BioAtomRow::new(
         BioResidueId::new(residue_id),
-        atom_name(b" CA "),
+        atom_name(name),
         Element::C,
         None,
         altloc.map(AltLocLabel::new),
@@ -90,8 +94,44 @@ fn atom(residue_id: u32, altloc: Option<u8>, serial: i32) -> BioAtomRow {
     )
 }
 
-fn structure(parts: BioStructureParts) -> BioStructure {
-    BioStructure::from_parts(parts).unwrap()
+#[test]
+fn protein_projection_preserves_exact_two_and_four_byte_atom_names() {
+    let mut parts = one_residue_parts(ResidueInfoKind::Aa, "ALA");
+    parts.residues[0] = residue(
+        0,
+        0,
+        2,
+        "ALA",
+        ResidueInfoKind::Aa,
+        None,
+        Some(11),
+        Some("label-A"),
+    );
+    parts.atoms = vec![
+        atom_named(0, None, 101, b"CA"),
+        atom_named(0, None, 102, b" CA "),
+    ];
+    parts.coordinates = BioCoordinateBlock::new(vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+    let source = structure(parts);
+    let projected = source.protein().unwrap();
+    assert_eq!(source.atoms()[0].name().as_bytes(), b"CA");
+    assert_eq!(source.atoms()[1].name().as_bytes(), b" CA ");
+    assert_eq!(projected.atoms()[0].name().as_bytes(), b"CA");
+    assert_eq!(projected.atoms()[1].name().as_bytes(), b" CA ");
+    assert_eq!(
+        projected.residues()[0].atoms()[0].row().name().as_bytes(),
+        b"CA"
+    );
+    assert_eq!(
+        projected.residues()[0].atoms()[1].row().name().as_bytes(),
+        b" CA "
+    );
+    assert_eq!(projected.atoms()[0].position(), [1.0, 2.0, 3.0]);
+    assert_eq!(projected.atoms()[1].position(), [4.0, 5.0, 6.0]);
+}
+
+fn structure(parts: BioStructureParts) -> BioStructureData {
+    BioStructureData::from_parts(parts).unwrap()
 }
 
 fn empty_parts() -> BioStructureParts {

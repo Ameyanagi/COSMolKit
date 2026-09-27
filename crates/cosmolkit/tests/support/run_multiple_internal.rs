@@ -382,6 +382,7 @@ fn changed_block_without_write_authority_is_rejected() {
 }
 
 #[test]
+#[cfg(feature = "rings")]
 fn invalidate_clears_each_candidate_cache_without_touching_source() {
     let base = molecule();
     let mut cache = DerivedCacheBlock::default();

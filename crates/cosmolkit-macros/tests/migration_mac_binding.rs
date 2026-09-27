@@ -725,3 +725,57 @@ fn current_cosmolkit_registry_validates_every_cfg_gated_projection() {
         .expect("one binding_contract invocation");
     expand_binding_contract(tokens).expect("all current projections satisfy canonical naming");
 }
+
+#[test]
+fn bio_objects_require_inplace_suffix_and_mutable_receiver() {
+    for target in ["BioStructure", "Protein"] {
+        let entry = format!(
+            r#"{{
+            semantic_id:"{target}.translate_",item:callable,owner:type_,
+            rust:crate::{target}::translate_,python:"translate_",javascript:"translate",
+            feature:"bio",exposure:public,support:experimental,parity:not_applicable,
+            kind:instance,parameters:[],output:(),error:none,state:in_place,operation:none,
+            signature:fn(&mut crate::{target})->()
+        }}"#
+        );
+        expand_binding_contract(registry_with(&entry)).unwrap();
+        assert!(
+            error_for(registry_with(&entry.replace("translate_", "translate")))
+                .contains("only in-place callable names")
+        );
+        assert!(
+            error_for(registry_with(&entry.replace("&mut", "&")))
+                .contains("wrong instance receiver")
+        );
+        assert!(
+            error_for(registry_with(
+                &entry.replace("state:in_place", "state:read_only")
+            ))
+            .contains("only in-place callable names")
+        );
+    }
+}
+
+#[test]
+fn bio_value_transforms_borrow_the_receiver_without_relaxing_other_types() {
+    for target in ["BioStructure", "Protein", "OtherValue"] {
+        let entry = format!(
+            r#"{{
+            semantic_id:"{target}.with_translation",item:callable,owner:type_,
+            rust:crate::{target}::with_translation,python:"with_translation",javascript:"withTranslation",
+            feature:"bio",exposure:public,support:experimental,parity:not_applicable,
+            kind:instance,parameters:[],output:crate::{target},error:none,
+            state:value_returning,operation:none,signature:fn(&crate::{target})->crate::{target}
+        }}"#
+        );
+        let borrowed = expand_binding_contract(registry_with(&entry));
+        let consuming = expand_binding_contract(registry_with(&entry.replace("fn(&", "fn(")));
+        if target == "OtherValue" {
+            assert!(borrowed.is_err());
+            assert!(consuming.is_ok());
+        } else {
+            assert!(borrowed.is_ok());
+            assert!(consuming.is_err());
+        }
+    }
+}

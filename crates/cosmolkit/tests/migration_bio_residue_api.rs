@@ -82,7 +82,8 @@ fn public_one_letter_expansion_preserves_order_special_tokens_and_errors() {
 
 #[test]
 fn source_identifier_values_are_usable_through_the_facade() {
-    let atom_name = AtomName::from_ascii(*b" CA ").unwrap();
+    let atom_name = AtomName::from_ascii(b" CA ").unwrap();
+    let cif_atom_name = AtomName::from_ascii(b"CA").unwrap();
     let residue_name = ResidueName::from_ascii(b"MSE ").unwrap();
     let auth_chain = PdbChainId::from_ascii(b"A").unwrap();
     let sequence = PdbSeqId::new(-12, Some(b'B'));
@@ -101,6 +102,8 @@ fn source_identifier_values_are_usable_through_the_facade() {
     let entity_source = EntitySourceIds::new("entity".to_owned());
 
     assert_eq!(atom_name.as_str(), " CA ");
+    assert_eq!(cif_atom_name.as_bytes(), b"CA");
+    assert_ne!(cif_atom_name, atom_name);
     assert_eq!(residue_name.as_str(), "MSE ");
     assert_eq!(sequence.seq_num(), -12);
     assert_eq!(sequence.ins_code(), Some(b'B'));

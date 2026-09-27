@@ -37,7 +37,7 @@ fn residue(chain_id: u32, atom_start: u32, name: &str, kind: ResidueInfoKind) ->
 fn atom(residue_id: u32, serial: i32, altloc: Option<u8>) -> BioAtomRow {
     BioAtomRow::new(
         BioResidueId::new(residue_id),
-        AtomName::from_ascii(*b" CA ").unwrap(),
+        AtomName::from_ascii(b" CA ").unwrap(),
         Element::C,
         None,
         altloc.map(AltLocLabel::new),

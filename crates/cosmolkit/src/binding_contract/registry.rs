@@ -4,6 +4,197 @@ use cosmolkit_macros::binding_contract;
 
 binding_contract! {
     pub static BINDING_CONTRACT = [
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "types.BioOperationError", item: type, owner: type_,
+            rust: crate::BioOperationError, python: "BioOperationError", javascript: "BioOperationError",
+            feature: "bio", exposure: public, support: experimental,
+            parity: not_applicable, role: error,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "BioStructure.with_translated_coordinates", item: callable, owner: type_,
+            rust: crate::BioStructure::with_translated_coordinates, python: "with_translated_coordinates", javascript: "withTranslatedCoordinates",
+            feature: "bio", exposure: public, support: experimental,
+            parity: not_applicable, kind: instance,
+            parameters: [{ name: offset, type: [f64; 3], default: required }],
+            output: crate::BioStructure, error: crate::BioOperationError,
+            state: value_returning, operation: "with_translated_coordinates",
+            signature: fn(&crate::BioStructure, [f64; 3]) -> Result<crate::BioStructure, crate::BioOperationError>,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "BioStructure.translate_", item: callable, owner: type_,
+            rust: crate::BioStructure::translate_, python: "translate_", javascript: "translate",
+            feature: "bio", exposure: public, support: experimental,
+            parity: not_applicable, kind: instance,
+            parameters: [{ name: offset, type: [f64; 3], default: required }],
+            output: (), error: crate::BioOperationError,
+            state: in_place, operation: "translate_",
+            signature: fn(&mut crate::BioStructure, [f64; 3]) -> Result<(), crate::BioOperationError>,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "Protein.with_translated_coordinates", item: callable, owner: type_,
+            rust: crate::Protein::with_translated_coordinates, python: "with_translated_coordinates", javascript: "withTranslatedCoordinates",
+            feature: "bio", exposure: public, support: experimental,
+            parity: not_applicable, kind: instance,
+            parameters: [{ name: offset, type: [f64; 3], default: required }],
+            output: crate::Protein, error: crate::BioOperationError,
+            state: value_returning, operation: "with_translated_coordinates",
+            signature: fn(&crate::Protein, [f64; 3]) -> Result<crate::Protein, crate::BioOperationError>,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "Protein.translate_", item: callable, owner: type_,
+            rust: crate::Protein::translate_, python: "translate_", javascript: "translate",
+            feature: "bio", exposure: public, support: experimental,
+            parity: not_applicable, kind: instance,
+            parameters: [{ name: offset, type: [f64; 3], default: required }],
+            output: (), error: crate::BioOperationError,
+            state: in_place, operation: "translate_",
+            signature: fn(&mut crate::Protein, [f64; 3]) -> Result<(), crate::BioOperationError>,
+        },
+// Structural readers and explicit Protein projection. Binding names are
+        // declarations, not implemented Python/JS adapters; no parity promotion.
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "types.BioPdbReadParams", item: type, owner: type_,
+            rust: crate::BioPdbReadParams, python: "BioPdbReadParams", javascript: "BioPdbReadParams",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, role: parameter,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "types.BioPdbReadError", item: type, owner: type_,
+            rust: crate::BioPdbReadError, python: "BioPdbReadError", javascript: "BioPdbReadError",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, role: error,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "types.BioPdbReadStage", item: type, owner: type_,
+            rust: crate::BioPdbReadStage, python: "BioPdbReadStage", javascript: "BioPdbReadStage",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, role: value,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "types.BioMmcifReadError", item: type, owner: type_,
+            rust: crate::BioMmcifReadError, python: "BioMmcifReadError", javascript: "BioMmcifReadError",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, role: error,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "types.BioMmcifReadStage", item: type, owner: type_,
+            rust: crate::BioMmcifReadStage, python: "BioMmcifReadStage", javascript: "BioMmcifReadStage",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, role: value,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "types.ProteinReadError", item: type, owner: type_,
+            rust: crate::ProteinReadError, python: "ProteinReadError", javascript: "ProteinReadError",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, role: error,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "BioStructure.from_pdb", item: callable, owner: type_,
+            rust: crate::BioStructure::from_pdb, python: "from_pdb", javascript: "fromPdb",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, kind: static_,
+            parameters: [{ name: text, type: &str, default: required }],
+            output: crate::BioStructure, error: crate::BioPdbReadError, state: value_returning, operation: none,
+            signature: fn(&str) -> Result<crate::BioStructure, crate::BioPdbReadError>,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "BioStructure.from_pdb_with_params", item: callable, owner: type_,
+            rust: crate::BioStructure::from_pdb_with_params, python: "from_pdb_with_params", javascript: "fromPdbWithParams",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, kind: static_,
+            parameters: [{ name: text, type: &str, default: required }, { name: params, type: &crate::BioPdbReadParams, default: required }],
+            output: crate::BioStructure, error: crate::BioPdbReadError, state: value_returning, operation: none,
+            signature: fn(&str, &crate::BioPdbReadParams) -> Result<crate::BioStructure, crate::BioPdbReadError>,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "BioStructure.from_mmcif", item: callable, owner: type_,
+            rust: crate::BioStructure::from_mmcif, python: "from_mmcif", javascript: "fromMmcif",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, kind: static_,
+            parameters: [{ name: text, type: &str, default: required }],
+            output: crate::BioStructure, error: crate::BioMmcifReadError, state: value_returning, operation: none,
+            signature: fn(&str) -> Result<crate::BioStructure, crate::BioMmcifReadError>,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "Protein.from_pdb", item: callable, owner: type_,
+            rust: crate::Protein::from_pdb, python: "from_pdb", javascript: "fromPdb",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, kind: static_,
+            parameters: [{ name: text, type: &str, default: required }],
+            output: crate::Protein, error: crate::ProteinReadError, state: value_returning, operation: none,
+            signature: fn(&str) -> Result<crate::Protein, crate::ProteinReadError>,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "Protein.from_pdb_with_params", item: callable, owner: type_,
+            rust: crate::Protein::from_pdb_with_params, python: "from_pdb_with_params", javascript: "fromPdbWithParams",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, kind: static_,
+            parameters: [{ name: text, type: &str, default: required }, { name: params, type: &crate::BioPdbReadParams, default: required }],
+            output: crate::Protein, error: crate::ProteinReadError, state: value_returning, operation: none,
+            signature: fn(&str, &crate::BioPdbReadParams) -> Result<crate::Protein, crate::ProteinReadError>,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "Protein.from_mmcif", item: callable, owner: type_,
+            rust: crate::Protein::from_mmcif, python: "from_mmcif", javascript: "fromMmcif",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, kind: static_,
+            parameters: [{ name: text, type: &str, default: required }],
+            output: crate::Protein, error: crate::ProteinReadError, state: value_returning, operation: none,
+            signature: fn(&str) -> Result<crate::Protein, crate::ProteinReadError>,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "BioPdbReadError.stage", item: callable, owner: type_,
+            rust: crate::BioPdbReadError::stage, python: "stage", javascript: "stage",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, kind: instance, parameters: [],
+            output: crate::BioPdbReadStage, error: none, state: read_only, operation: none,
+            signature: fn(&crate::BioPdbReadError) -> crate::BioPdbReadStage,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "BioPdbReadError.line_number", item: callable, owner: type_,
+            rust: crate::BioPdbReadError::line_number, python: "line_number", javascript: "lineNumber",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, kind: instance, parameters: [],
+            output: Option<i32>, error: none, state: read_only, operation: none,
+            signature: fn(&crate::BioPdbReadError) -> Option<i32>,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "BioPdbReadError.record_tag", item: callable, owner: type_,
+            rust: crate::BioPdbReadError::record_tag, python: "record_tag", javascript: "recordTag",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, kind: instance, parameters: [],
+            output: Option<[u8; 4]>, error: none, state: read_only, operation: none,
+            signature: fn(&crate::BioPdbReadError) -> Option<[u8; 4]>,
+        },
+        #[cfg(feature = "bio")]
+        {
+            semantic_id: "BioMmcifReadError.stage", item: callable, owner: type_,
+            rust: crate::BioMmcifReadError::stage, python: "stage", javascript: "stage",
+            feature: "bio", exposure: public, support: experimental,
+            parity: required_when_supported, kind: instance, parameters: [],
+            output: crate::BioMmcifReadStage, error: none, state: read_only, operation: none,
+            signature: fn(&crate::BioMmcifReadError) -> crate::BioMmcifReadStage,
+        },
         // FP-values public boundary. Source: pinned RDKit SparseIntVect.h
         // and Wrap/SparseIntVect.cpp:135-185. Canonical names replace get_*
         // and *_i implementation spellings. Python/JS projections are declared,
@@ -4225,9 +4416,9 @@ binding_contract! {
             operation: none,
             signature: fn(&str, crate::ResidueInfoKind) -> Result<Vec<String>, crate::ResidueSequenceError>,
         },
-        // BIO-hierarchy canonical detached values. The public facade re-exports
-        // the unique validated cosmolkit-bio owner; these rows do not create a
-        // BioStructure operation or a second hierarchy implementation.
+        // BioStructure is the public owner of detached BIO blocks. Algorithms
+        // and structural validation remain in cosmolkit-bio; generated BIO
+        // operations provide value/in-place wrappers over the same body.
         #[cfg(feature = "bio")]
         {
             semantic_id: "types.BioStructure",
@@ -4704,10 +4895,9 @@ binding_contract! {
             parity: required_now,
             role: value,
         },
-        // BIO-protein canonical detached projection. The entries freeze one
-        // owned Protein value backed by the canonical BioStructure hierarchy
-        // and borrowed read-only child views. Text/file construction remains
-        // owned by the later Gemmi-primary IO units.
+        // Protein uses the same BIO operation boundary while preserving its
+        // amino-acid invariant. Child views borrow the detached hierarchy;
+        // associated text constructors delegate parsing to cosmolkit-io.
         #[cfg(feature = "bio")]
         {
             semantic_id: "types.Protein",

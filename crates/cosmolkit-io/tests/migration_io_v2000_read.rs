@@ -245,6 +245,8 @@ fn strict_version_symbol_and_fixed_width_rules_match_the_pinned_parser() {
 
 #[test]
 fn ordinary_shorthand_dummy_and_rgroup_symbols_keep_source_state() {
+    // RDKit sets R0 isotope to numeric zero; the detached model projects
+    // that unspecified-isotope sentinel to None.
     for (symbol, atomic_number, isotope, label) in [
         ("CL", 17, None, None),
         ("D", 1, Some(2), None),
@@ -254,7 +256,7 @@ fn ordinary_shorthand_dummy_and_rgroup_symbols_keep_source_state() {
         ("L", 0, None, None),
         ("LP", 0, None, None),
         ("R#", 0, None, Some("R#")),
-        ("R0", 0, Some(0), Some("R0")),
+        ("R0", 0, None, Some("R0")),
         ("R12", 0, Some(12), Some("R12")),
         ("R99", 0, Some(99), Some("R99")),
     ] {

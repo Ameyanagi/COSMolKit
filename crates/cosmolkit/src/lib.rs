@@ -35,16 +35,20 @@ pub use binding_contract::{
     BindingParity, BindingSupport, BindingTypeRole, StateModel,
 };
 #[cfg(feature = "bio")]
+pub mod bio;
+#[cfg(feature = "bio")]
+pub use bio::{BioOperationError, BioStructure, Protein, ProteinReadError};
+#[cfg(feature = "bio")]
 pub use cosmolkit_bio::{
     AltLocLabel, AltLocRequest, AtomName, AtomSourceIds, BioAltLocGroupId, BioAssembly,
     BioAssemblyGenerator, BioAssemblyId, BioAssemblyOperator, BioAssemblySpecialKind, BioAtomId,
     BioAtomRow, BioCalcFlag, BioChainId, BioChainRow, BioCoordinateBlock, BioCoordinateFormat,
     BioCrystalCell, BioCrystalInfo, BioEntityDbRef, BioEntityId, BioEntityRow, BioModelId,
     BioModelRow, BioNcsOperator, BioResidueId, BioResidueRow, BioRowSpan, BioSiftsUnpResidue,
-    BioStructure, BioStructureError, BioStructureParts, BioTransform, ChainKind, ChainSourceIds,
-    EntityKind, EntitySourceIds, PdbAtomSerial, PdbChainId, PdbSeqId, PolymerKind, Protein,
-    ProteinAtomRef, ProteinChainRef, ProteinProjectionError, ProteinResidueRef, ResidueCode,
-    ResidueInfo, ResidueInfoKind, ResidueKind, ResidueName, ResidueSequenceError, ResidueSourceIds,
+    BioStructureError, BioStructureParts, BioTransform, ChainKind, ChainSourceIds, EntityKind,
+    EntitySourceIds, PdbAtomSerial, PdbChainId, PdbSeqId, PolymerKind, ProteinAtomRef,
+    ProteinChainRef, ProteinProjectionError, ProteinResidueRef, ResidueCode, ResidueInfo,
+    ResidueInfoKind, ResidueKind, ResidueName, ResidueSequenceError, ResidueSourceIds,
     UNKNOWN_TABULATED_RESIDUE_INDEX, expand_one_letter, expand_one_letter_sequence,
     find_residue_info, find_residue_info_index, residue_code, residue_info, residue_info_checked,
 };
@@ -73,6 +77,10 @@ pub use cosmolkit_core::{
 };
 #[cfg(feature = "valence")]
 pub use cosmolkit_core::{ValenceError, ValenceModel, ValenceParams};
+#[cfg(feature = "bio")]
+pub use cosmolkit_io::{
+    BioMmcifReadError, BioMmcifReadStage, BioPdbReadError, BioPdbReadParams, BioPdbReadStage,
+};
 pub use cosmolkit_model as model;
 pub use cosmolkit_model::*;
 #[cfg(feature = "smiles")]

@@ -6,25 +6,30 @@ use cosmolkit_types::Element;
 
 use crate::{
     AltLocLabel, AtomName, BioAtomId, BioAtomRow, BioChainId, BioChainRow, BioCoordinateBlock,
-    BioEntityId, BioModelId, BioModelRow, BioResidueId, BioResidueRow, BioRowSpan, BioStructure,
-    BioStructureError, BioStructureParts, ChainKind, ChainSourceIds, ResidueCode, ResidueInfo,
-    ResidueInfoKind, ResidueKind, ResidueName, find_residue_info,
+    BioEntityId, BioModelId, BioModelRow, BioResidueId, BioResidueRow, BioRowSpan,
+    BioStructureData, BioStructureError, BioStructureParts, ChainKind, ChainSourceIds, ResidueCode,
+    ResidueInfo, ResidueInfoKind, ResidueKind, ResidueName, find_residue_info,
 };
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Protein {
-    structure: BioStructure,
+pub struct ProteinData {
+    structure: BioStructureData,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProteinProjectionError {
     Structure(BioStructureError),
     MissingEntityMapping { source: BioEntityId },
+    NonAminoAcidResidue { index: usize },
 }
 
 impl fmt::Display for ProteinProjectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NonAminoAcidResidue { index } => write!(
+                formatter,
+                "protein contains non-amino-acid residue at row {index}"
+            ),
             Self::Structure(error) => write!(formatter, "protein projection failed: {error}"),
             Self::MissingEntityMapping { source } => write!(
                 formatter,
@@ -39,7 +44,7 @@ impl std::error::Error for ProteinProjectionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Structure(error) => Some(error),
-            Self::MissingEntityMapping { .. } => None,
+            Self::MissingEntityMapping { .. } | Self::NonAminoAcidResidue { .. } => None,
         }
     }
 }
@@ -52,30 +57,49 @@ impl From<BioStructureError> for ProteinProjectionError {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProteinChainRef<'a> {
-    protein: &'a Protein,
+    protein: &'a ProteinData,
     chain_id: BioChainId,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProteinResidueRef<'a> {
-    protein: &'a Protein,
+    protein: &'a ProteinData,
     residue_id: BioResidueId,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProteinAtomRef<'a> {
-    protein: &'a Protein,
+    protein: &'a ProteinData,
     atom_id: BioAtomId,
 }
 
-impl BioStructure {
-    pub fn protein(&self) -> Result<Protein, ProteinProjectionError> {
-        Protein::project(self)
+impl BioStructureData {
+    pub fn protein(&self) -> Result<ProteinData, ProteinProjectionError> {
+        ProteinData::project(self)
     }
 }
 
-impl Protein {
-    fn project(source: &BioStructure) -> Result<Self, ProteinProjectionError> {
+impl ProteinData {
+    /// Detached editing only; callers must validate before publishing a result.
+    pub fn structure_mut(&mut self) -> &mut BioStructureData {
+        &mut self.structure
+    }
+
+    pub fn structure(&self) -> &BioStructureData {
+        &self.structure
+    }
+
+    pub fn validate(&self) -> Result<(), ProteinProjectionError> {
+        self.structure.validate()?;
+        for (index, residue) in self.structure.residues().iter().enumerate() {
+            if !is_amino_acid_kind(residue.residue_info_kind()) {
+                return Err(ProteinProjectionError::NonAminoAcidResidue { index });
+            }
+        }
+        Ok(())
+    }
+
+    fn project(source: &BioStructureData) -> Result<Self, ProteinProjectionError> {
         let retained_residues: Vec<bool> = source
             .residues()
             .iter()
@@ -205,7 +229,7 @@ impl Protein {
             ));
         }
 
-        let structure = BioStructure::from_parts(BioStructureParts {
+        let structure = BioStructureData::from_parts(BioStructureParts {
             input_format: source.input_format(),
             models,
             chains,
@@ -231,7 +255,7 @@ impl Protein {
             // rule; source serial connectivity remains metadata, not bonds.
             // Complexity review: these clones are linear in their retained
             // owned values, as Gemmi's `empty_copy` deep-copies the same
-            // aggregates; no full BioStructure clone or remapping scan occurs.
+            // aggregates; no full BioStructureData clone or remapping scan occurs.
             connections: source.connections().to_vec(),
             cispeps: source.cispeps().to_vec(),
             mod_residues: source.mod_residues().to_vec(),
@@ -252,7 +276,7 @@ impl Protein {
             crystal: source.crystal().cloned(),
             ncs_operators: source.ncs_operators().to_vec(),
             // A generator referencing an excluded chain is not a valid
-            // biological assembly of the projection. Protein is deliberately
+            // biological assembly of the projection. ProteinData is deliberately
             // not a lossless structure/writer value, so assemblies are absent
             // instead of being guessed or partially rewritten.
             assemblies: Vec::new(),

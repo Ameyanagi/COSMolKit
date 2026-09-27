@@ -1,7 +1,7 @@
 //! Detached CIF lexical, document, and scalar-formatting primitives.
 //!
 //! This module is the single CIF representation used by the Gemmi-primary
-//! structural readers. It intentionally does not contain BioStructure
+//! structural readers. It intentionally does not contain BioStructureData
 //! conversion or a serializer policy.
 
 use std::collections::HashSet;

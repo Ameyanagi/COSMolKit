@@ -2434,7 +2434,13 @@ fn remove_hydrogens_pass(
         .transpose()?;
 
     clear_remove_hydrogen_computed_properties(&mut topology, properties);
-    if removed_any && params.remove_nonimplicit && params.sanitize {
+    // RDKit's atomsToRemove is a bitset sized to the ORIGINAL atom count.
+    // Its empty() tests size, not whether any removal bit is set. Our compact
+    // candidate vector has different empty semantics: use removed_any only
+    // for compaction, never for these postprocessing guards. This also keeps
+    // the outer sanitization after an isotope-tracking preliminary removal.
+    // The size test is O(1), just like dynamic_bitset::empty().
+    if old_atom_count != 0 && params.remove_nonimplicit && params.sanitize {
         let sanitize_state = query_rows
             .as_ref()
             .map(|(atoms, bonds)| QueryStateRef::try_for_topology(atoms, bonds, &topology))
@@ -2451,7 +2457,7 @@ fn remove_hydrogens_pass(
             query_rows = Some(remap_query_rows(state, &topology, &identity)?);
         }
     }
-    if removed_any {
+    if old_atom_count != 0 {
         normalize_removed_hydrogen_chirality(&mut topology);
     }
     topology.validate()?;

@@ -63,7 +63,10 @@ topology mapping
 
 Truly read-only accessors are outside this system.
 
-BioStructure operations follow the same design through `bio_structure_ops!` and `BioOpParts`.
+BioStructure and Protein use the lighter `bio_structure_ops!` design in
+[BIO architecture](./bio_architecture.md): generated field borrows, COW and
+shared value/in-place implementation, without Molecule write-back tracing,
+derived-cache contracts or runtime permission accounting.
 
 ---
 

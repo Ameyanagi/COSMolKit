@@ -510,6 +510,36 @@ fn canonical_registry_preserves_order_and_feature_local_subsets() {
             ],
         );
     }
+    if cfg!(feature = "bio") {
+        // Approved associated readers and lightweight operations precede the
+        // existing registry. Preserve exact ordering and feature-local coverage.
+        expected.splice(
+            0..0,
+            [
+                "types.BioOperationError",
+                "BioStructure.with_translated_coordinates",
+                "BioStructure.translate_",
+                "Protein.with_translated_coordinates",
+                "Protein.translate_",
+                "types.BioPdbReadParams",
+                "types.BioPdbReadError",
+                "types.BioPdbReadStage",
+                "types.BioMmcifReadError",
+                "types.BioMmcifReadStage",
+                "types.ProteinReadError",
+                "BioStructure.from_pdb",
+                "BioStructure.from_pdb_with_params",
+                "BioStructure.from_mmcif",
+                "Protein.from_pdb",
+                "Protein.from_pdb_with_params",
+                "Protein.from_mmcif",
+                "BioPdbReadError.stage",
+                "BioPdbReadError.line_number",
+                "BioPdbReadError.record_tag",
+                "BioMmcifReadError.stage",
+            ],
+        );
+    }
     assert_eq!(
         BINDING_CONTRACT
             .iter()

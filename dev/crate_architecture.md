@@ -10,6 +10,13 @@ defined in [`final_target_architecture.md`](./final_target_architecture.md).
 
 ## 1. Ownership Model
 
+The public `BioStructure` and `Protein` objects also belong to `cosmolkit`.
+Their detached data, row types, validation and algorithms belong to
+`cosmolkit-bio`; structural parsing/serialization belongs to `cosmolkit-io`.
+The public objects are not re-exports of the detached values. Associated
+constructors and lightweight generated operations follow
+[BIO architecture](./bio_architecture.md).
+
 `cosmolkit` is the public API and molecule-runtime crate. It is intentionally
 more than a thin facade. It owns the stateful object and the rules required to
 keep that object valid:
@@ -84,6 +91,8 @@ current core-to-CX edge is migration residue from colocated notation code and
 must be removed when those parsers are extracted.
 
 ## 3. Model Crate
+
+Coordinate storage separation and consumer selection follow [Coordinate Storage and Selection](./coordinate_selection_contract.md). No cross-dimension insertion order determines a default conformer.
 
 `cosmolkit-model` contains stable value types shared by algorithm crates. These
 types enforce local structural invariants, but they do not own molecule-runtime
