@@ -274,15 +274,15 @@ fn value_forms_assign_tetrahedral_state_preserve_props_and_keep_weak_mapping() {
             .atom(AtomId::new(0))
             .unwrap()
             .prop("_CIPNeighborOrder"),
-        Some("[4,3,2,1]")
+        Some(&cosmolkit_model::PropertyValue::from("[4,3,2,1]"))
     );
     assert_eq!(
         short.atom(AtomId::new(0)).unwrap().prop("atom-user"),
-        Some("kept")
+        Some(&cosmolkit_model::PropertyValue::from("kept"))
     );
     assert_eq!(
         short.bond(BondId::new(0)).unwrap().prop("bond-user"),
-        Some("kept")
+        Some(&cosmolkit_model::PropertyValue::from("kept"))
     );
     assert_eq!(source.property("_CIPComputed"), None);
     assert_eq!(short.property("_CIPComputed"), Some("true"));
@@ -328,14 +328,14 @@ fn selection_and_repeated_assignment_preserve_unselected_state_exactly() {
         .unwrap();
     assert_eq!(
         none_selected.atom(AtomId::new(0)).unwrap().prop("_CIPCode"),
-        Some("old")
+        Some(&cosmolkit_model::PropertyValue::from("old"))
     );
     assert_eq!(
         none_selected
             .atom(AtomId::new(0))
             .unwrap()
             .prop("_CIPNeighborOrder"),
-        Some("[0]")
+        Some(&cosmolkit_model::PropertyValue::from("[0]"))
     );
     assert_eq!(none_selected.property("_CIPComputed"), Some("true"));
 
@@ -353,7 +353,7 @@ fn selection_and_repeated_assignment_preserve_unselected_state_exactly() {
             .atom(AtomId::new(0))
             .unwrap()
             .prop("_CIPNeighborOrder"),
-        Some("[4,3,2,1]")
+        Some(&cosmolkit_model::PropertyValue::from("[4,3,2,1]"))
     );
     assert_eq!(selected.with_cip_labels().unwrap(), selected);
 }
@@ -369,7 +369,10 @@ fn sp2_and_atropisomer_results_cross_the_public_transaction_without_reordering()
         assert_eq!(axis.cip_descriptor(), Ok(Some(descriptor)));
         assert_eq!(axis.stereo(), normalized);
         assert_eq!(axis.stereo_atoms(), Some([AtomId::new(4), AtomId::new(5)]));
-        assert_eq!(axis.prop("_CIPNeighborOrder"), Some("[4,5]"));
+        assert_eq!(
+            axis.prop("_CIPNeighborOrder"),
+            Some(&cosmolkit_model::PropertyValue::from("[4,5]"))
+        );
     }
 
     for (stereo, descriptor) in [
@@ -381,7 +384,10 @@ fn sp2_and_atropisomer_results_cross_the_public_transaction_without_reordering()
         assert_eq!(axis.cip_descriptor(), Ok(Some(descriptor)));
         assert_eq!(axis.stereo(), stereo);
         assert_eq!(axis.stereo_atoms(), None);
-        assert_eq!(axis.prop("_CIPNeighborOrder"), Some("[4,5]"));
+        assert_eq!(
+            axis.prop("_CIPNeighborOrder"),
+            Some(&cosmolkit_model::PropertyValue::from("[4,5]"))
+        );
     }
 }
 

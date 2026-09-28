@@ -387,10 +387,19 @@ fn live_compacting_commit_remaps_rows_and_preserves_typed_references() {
     assert_eq!(output.properties().name(), Some("remove-hydrogens-public"));
     assert_eq!(output.property("ordinary"), Some("kept"));
     assert_eq!(output.property("_CIPComputed"), None);
-    assert_eq!(output.atoms()[0].prop("atom-note"), Some("c"));
+    assert_eq!(
+        output.atoms()[0].prop("atom-note"),
+        Some(&cosmolkit_model::PropertyValue::from("c"))
+    );
     assert_eq!(output.atoms()[0].prop("_CIPCode"), None);
-    assert_eq!(output.atoms()[1].prop("atom-note"), Some("o"));
-    assert_eq!(output.bonds()[0].prop("bond-note"), Some("co"));
+    assert_eq!(
+        output.atoms()[1].prop("atom-note"),
+        Some(&cosmolkit_model::PropertyValue::from("o"))
+    );
+    assert_eq!(
+        output.bonds()[0].prop("bond-note"),
+        Some(&cosmolkit_model::PropertyValue::from("co"))
+    );
     assert_eq!(output.bonds()[0].prop("_CIPCode"), None);
     assert_eq!(
         output.properties().sdf_property_lists()[0].values(),

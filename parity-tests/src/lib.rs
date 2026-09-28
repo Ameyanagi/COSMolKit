@@ -53,7 +53,7 @@ pub fn corpus(path: Option<&Path>, tasks: &[&Task]) -> Result<Corpus> {
         corpus.fingerprints = if is_json {
             serde_json::from_slice(&read(path.unwrap())?).map_err(|e| e.to_string())?
         } else {
-            registry::builtin()
+            registry::fingerprint_corpus::generate()
         };
     }
     if molecular_tasks {
@@ -71,6 +71,7 @@ fn registry_digest() -> String {
         concat!(
             include_str!("registry.rs"),
             include_str!("registry/molecule_plan.rs"),
+            include_str!("registry/fingerprint_corpus.rs"),
             include_str!("molecular.rs")
         )
         .as_bytes(),

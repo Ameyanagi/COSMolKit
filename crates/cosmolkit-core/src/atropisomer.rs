@@ -8,7 +8,7 @@ use cosmolkit_model::{
 };
 use cosmolkit_types::{BondDirection, BondOrder, BondStereo, Hybridization};
 
-use crate::{HybridizationAssignment, RingInfo};
+use crate::{HybridizationAssignment, RingInfo, WedgeAssignments, WedgeInfo};
 
 const REALLY_SMALL_BOND_LEN: f64 = 0.000_000_1;
 
@@ -272,6 +272,38 @@ pub fn atropisomer_carriers(
             carrier_bonds: end.bonds,
         })
     }))
+}
+
+/// Returns carrier ends for requested axial bonds after validating topology once.
+pub fn atropisomer_carriers_for_bonds(
+    topology: &TopologyBlock,
+    axial_bonds: &[BondId],
+) -> Result<Vec<(BondId, Option<[AtropisomerCarrierEnd; 2]>)>, AtropisomerError> {
+    // Validate once, then reuse the source-shaped `atropisomer_ends` owner
+    // helper for each requested bond instead of repeating a whole-topology
+    // scan for every atropisomer neighbor in the CX bond-config writer.
+    topology
+        .validate()
+        .map_err(|source| AtropisomerError::InvalidTopology { source })?;
+    axial_bonds
+        .iter()
+        .copied()
+        .map(|axial_bond| {
+            let bond = topology.bonds.get(axial_bond.index()).ok_or(
+                AtropisomerError::AxialBondOutOfRange {
+                    bond: axial_bond,
+                    bond_count: topology.bonds.len(),
+                },
+            )?;
+            let carriers = atropisomer_ends(topology, bond).map(|ends| {
+                ends.map(|end| AtropisomerCarrierEnd {
+                    focus: end.atom,
+                    carrier_bonds: end.bonds,
+                })
+            });
+            Ok((axial_bond, carriers))
+        })
+        .collect()
 }
 
 fn point(conformer: AtropisomerConformer<'_>, atom: AtomId) -> [f64; 3] {
@@ -1137,6 +1169,424 @@ pub fn stereo_group_atom_ids(
         }
     }
     Ok(ids)
+}
+
+pub fn get_all_atom_ids_for_stereo_group(
+    topology: &TopologyBlock,
+    group: &StereoGroup,
+    wedge_bonds: &WedgeAssignments,
+) -> Result<Vec<AtomId>, AtropisomerError> {
+    validate_stereo_group_topology(topology)?;
+    validate_stereo_group_members(topology, group)?;
+    Ok(collect_stereo_group_atom_ids(topology, group, wedge_bonds))
+}
+
+/// Collects source-ordered atom IDs for each checked stereo group.
+///
+/// The topology is validated once for the batch. Group membership is checked
+/// in input order before each source collection pass.
+pub fn get_all_atom_ids_for_stereo_groups(
+    topology: &TopologyBlock,
+    groups: &[StereoGroup],
+    wedge_bonds: &WedgeAssignments,
+) -> Result<Vec<Vec<AtomId>>, AtropisomerError> {
+    validate_stereo_group_topology(topology)?;
+
+    let mut atom_ids_by_group = Vec::with_capacity(groups.len());
+    for group in groups {
+        validate_stereo_group_members(topology, group)?;
+        atom_ids_by_group.push(collect_stereo_group_atom_ids(topology, group, wedge_bonds));
+    }
+    Ok(atom_ids_by_group)
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static STEREO_GROUP_TOPOLOGY_VALIDATION_CALLS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+fn validate_stereo_group_topology(topology: &TopologyBlock) -> Result<(), AtropisomerError> {
+    #[cfg(test)]
+    STEREO_GROUP_TOPOLOGY_VALIDATION_CALLS.with(|calls| calls.set(calls.get() + 1));
+
+    topology
+        .validate()
+        .map_err(|source| AtropisomerError::InvalidTopology { source })
+}
+
+fn validate_stereo_group_members(
+    topology: &TopologyBlock,
+    group: &StereoGroup,
+) -> Result<(), AtropisomerError> {
+    for atom in group.atoms() {
+        if atom.index() >= topology.atoms.len() {
+            return Err(AtropisomerError::StereoGroupAtomOutOfRange {
+                atom: *atom,
+                atom_count: topology.atoms.len(),
+            });
+        }
+    }
+    for bond in group.bonds() {
+        if bond.index() >= topology.bonds.len() {
+            return Err(AtropisomerError::StereoGroupBondOutOfRange {
+                bond: *bond,
+                bond_count: topology.bonds.len(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn collect_stereo_group_atom_ids(
+    topology: &TopologyBlock,
+    group: &StereoGroup,
+    wedge_bonds: &WedgeAssignments,
+) -> Vec<AtomId> {
+    // Complete pinned source: Atropisomers::getAllAtomIdsForStereoGroup.
+    // RDKit❗❌: void getAllAtomIdsForStereoGroup(
+    // RDKit❗❌:     const ROMol &mol, const StereoGroup &group,
+    // RDKit❗❌:     std::vector<unsigned int> &atomIds,
+    // RDKit❗❌:     const std::map<int, std::unique_ptr<RDKit::Chirality::WedgeInfoBase>>
+    // RDKit❗❌:         &wedgeBonds) {
+    // RDKit❗❌:   atomIds.clear();
+    // RDKit❗❌:   for (auto &&atom : group.getAtoms()) {
+    // RDKit❗❌:     atomIds.push_back(atom->getIdx());
+    // RDKit❗❌:   }
+    // RDKit❗❌:
+    // RDKit❗❌:   for (auto &&bond : group.getBonds()) {
+    // RDKit❗❌:     // figure out which atoms of the bond get wedge/hash indications
+    // RDKit❗❌:     // mark the atom with the wedge/hash
+    // RDKit❗❌:
+    // RDKit❗❌:     for (auto atom : {bond->getBeginAtom(), bond->getEndAtom()}) {
+    // RDKit❗❌:       for (const auto atomBond : mol.atomBonds(atom)) {
+    // RDKit❗❌:         if (atomBond->getIdx() == bond->getIdx()) {
+    // RDKit❗❌:           continue;
+    // RDKit❗❌:         }
+    // RDKit❗❌:
+    // RDKit❗❌:         if (atomBond->getBondDir() == Bond::BEGINWEDGE ||
+    // RDKit❗❌:             atomBond->getBondDir() == Bond::BEGINDASH ||
+    // RDKit❗❌:             (wedgeBonds.find(atomBond->getIdx()) != wedgeBonds.end() &&
+    // RDKit❗❌:              (wedgeBonds.at(atomBond->getIdx())->getType()) ==
+    // RDKit❗❌:                  Chirality::WedgeInfoType::WedgeInfoTypeAtropisomer)) {
+    // RDKit❗❌:           if (std::find(atomIds.begin(), atomIds.end(), atom->getIdx()) ==
+    // RDKit❗❌:               atomIds.end()) {
+    // RDKit❗❌:             atomIds.push_back(atom->getIdx());
+    // RDKit❗❌:           }
+    // RDKit❗❌:         }
+    // RDKit❗❌:       }
+    // RDKit❗❌:     }
+    // RDKit❗❌:   }
+    // RDKit❗❌: }
+    // Behavior review: the shared wedge map contributes only Atropisomer entries;
+    // existing BEGINWEDGE/BEGINDASH directions, group member order and adjacency
+    // source order are preserved, and newly found endpoint IDs are appended once.
+    // Complexity review: adjacency and BTreeMap lookups avoid rescanning wedge
+    // updates; linear Vec membership matches source std::find. Full detached
+    // topology validation adds an O(V+E) pass absent from the pointer-valid source.
+    let mut atom_ids = group.atoms().to_vec();
+    for group_bond_id in group.bonds() {
+        let group_bond = &topology.bonds[group_bond_id.index()];
+        for atom in [group_bond.begin(), group_bond.end()] {
+            for adjacent in topology.adjacency.neighbors_of(atom.index()) {
+                if adjacent.bond == *group_bond_id {
+                    continue;
+                }
+
+                let adjacent_bond = &topology.bonds[adjacent.bond.index()];
+                if matches!(
+                    adjacent_bond.direction(),
+                    BondDirection::BeginWedge | BondDirection::BeginDash
+                ) || matches!(
+                    wedge_bonds.get(adjacent.bond),
+                    Some(WedgeInfo::Atropisomer { .. })
+                ) {
+                    if !atom_ids.contains(&atom) {
+                        atom_ids.push(atom);
+                    }
+                }
+            }
+        }
+    }
+    atom_ids
+}
+
+#[cfg(test)]
+mod stereo_group_batch_tests {
+    use super::*;
+    use crate::{WedgeAssignments, pick_bonds_to_wedge};
+    use cosmolkit_model::{Atom, AtomSpec, BondSpec, StereoGroupKind, TopologyValidationError};
+    use cosmolkit_types::{BondOrder, ChiralTag, Element};
+
+    fn group_topology(directions: [BondDirection; 3]) -> TopologyBlock {
+        let atoms = (0..4)
+            .map(|index| {
+                Atom::from_spec(
+                    AtomId::new(index),
+                    AtomSpec::new(Element::C).with_chiral_tag(ChiralTag::Unspecified),
+                )
+            })
+            .collect();
+        let edges = [(0, 1), (1, 2), (1, 3)];
+        let bonds = edges
+            .into_iter()
+            .zip(directions)
+            .enumerate()
+            .map(|(index, ((begin, end), direction))| {
+                Bond::from_spec(
+                    BondId::new(index),
+                    BondSpec::new(AtomId::new(begin), AtomId::new(end), BondOrder::Single)
+                        .with_direction(direction),
+                )
+            })
+            .collect();
+        TopologyBlock::try_from_parts(atoms, bonds, Vec::new(), Vec::new())
+            .expect("valid stereo-group test topology")
+    }
+
+    fn tetrahedral_wedge_topology() -> TopologyBlock {
+        let atoms = (0..5)
+            .map(|index| {
+                let tag = if index == 0 {
+                    ChiralTag::TetrahedralCw
+                } else {
+                    ChiralTag::Unspecified
+                };
+                Atom::from_spec(
+                    AtomId::new(index),
+                    AtomSpec::new(Element::C).with_chiral_tag(tag),
+                )
+            })
+            .collect();
+        let bonds = (0..4)
+            .map(|index| {
+                Bond::from_spec(
+                    BondId::new(index),
+                    BondSpec::new(AtomId::new(0), AtomId::new(index + 1), BondOrder::Single),
+                )
+            })
+            .collect();
+        TopologyBlock::try_from_parts(atoms, bonds, Vec::new(), Vec::new())
+            .expect("valid tetrahedral wedge topology")
+    }
+
+    fn reset_validation_count() {
+        STEREO_GROUP_TOPOLOGY_VALIDATION_CALLS.with(|calls| calls.set(0));
+    }
+
+    fn validation_count() -> usize {
+        STEREO_GROUP_TOPOLOGY_VALIDATION_CALLS.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn cf_smi_groups_batch_preserves_member_order_duplicates_and_overlaps() {
+        let topology = group_topology([
+            BondDirection::None,
+            BondDirection::BeginWedge,
+            BondDirection::BeginDash,
+        ]);
+        let groups = vec![
+            StereoGroup::new(
+                StereoGroupKind::Absolute,
+                vec![AtomId::new(2), AtomId::new(0), AtomId::new(2)],
+                Vec::new(),
+            ),
+            StereoGroup::new(
+                StereoGroupKind::Or,
+                vec![AtomId::new(0), AtomId::new(1)],
+                Vec::new(),
+            ),
+            StereoGroup::new(
+                StereoGroupKind::And,
+                vec![AtomId::new(3)],
+                vec![BondId::new(0)],
+            ),
+            StereoGroup::new(
+                StereoGroupKind::Or,
+                vec![AtomId::new(1)],
+                vec![BondId::new(0)],
+            ),
+        ];
+
+        let expected = vec![
+            vec![AtomId::new(2), AtomId::new(0), AtomId::new(2)],
+            vec![AtomId::new(0), AtomId::new(1)],
+            vec![AtomId::new(3), AtomId::new(1)],
+            vec![AtomId::new(1)],
+        ];
+        let batch =
+            get_all_atom_ids_for_stereo_groups(&topology, &groups, &WedgeAssignments::default())
+                .expect("collect all valid groups");
+        let independent = groups
+            .iter()
+            .map(|group| {
+                get_all_atom_ids_for_stereo_group(&topology, group, &WedgeAssignments::default())
+                    .expect("collect one valid group")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(batch, expected);
+        assert_eq!(batch, independent);
+    }
+
+    #[test]
+    fn cf_smi_groups_batch_handles_empty_and_single_group() {
+        let topology = group_topology([BondDirection::None; 3]);
+        let empty =
+            get_all_atom_ids_for_stereo_groups(&topology, &[], &WedgeAssignments::default())
+                .expect("empty checked batch");
+        assert!(empty.is_empty());
+
+        let group = StereoGroup::new(
+            StereoGroupKind::Absolute,
+            vec![AtomId::new(3), AtomId::new(0)],
+            Vec::new(),
+        );
+        assert_eq!(
+            get_all_atom_ids_for_stereo_groups(
+                &topology,
+                std::slice::from_ref(&group),
+                &WedgeAssignments::default(),
+            )
+            .expect("one checked group"),
+            vec![vec![AtomId::new(3), AtomId::new(0)]]
+        );
+    }
+
+    #[test]
+    fn cf_smi_groups_wedge_map_accepts_only_atropisomer_entries() {
+        let topology = group_topology([BondDirection::None; 3]);
+        let axial_group =
+            StereoGroup::new(StereoGroupKind::Absolute, Vec::new(), vec![BondId::new(0)]);
+        let update = AtropisomerWedgeUpdate {
+            bond: BondId::new(1),
+            begin: AtomId::new(1),
+            end: AtomId::new(2),
+            direction: BondDirection::None,
+            atropisomer_bond: BondId::new(0),
+        };
+        let atrop_map =
+            WedgeAssignments::from_atropisomer_wedge_assignment(AtropisomerWedgeAssignment {
+                bond_updates: vec![update],
+                diagnostics: Vec::new(),
+            });
+        assert_eq!(
+            get_all_atom_ids_for_stereo_group(&topology, &axial_group, &atrop_map)
+                .expect("Atropisomer map entry expands its endpoint"),
+            vec![AtomId::new(1)]
+        );
+
+        let tetrahedral = tetrahedral_wedge_topology();
+        let chiral_map = pick_bonds_to_wedge(&tetrahedral, None)
+            .expect("valid tetrahedral topology receives a Chiral wedge map entry");
+        let (chiral_bond, entry) = chiral_map
+            .iter()
+            .find(|(_, entry)| matches!(entry, WedgeInfo::Chiral { .. }))
+            .expect("a tetrahedral center receives a Chiral map entry");
+        assert!(matches!(entry, WedgeInfo::Chiral { .. }));
+        let group_bond = (0..4)
+            .map(BondId::new)
+            .find(|bond| *bond != chiral_bond)
+            .expect("a second central bond remains for the group");
+        let chiral_group =
+            StereoGroup::new(StereoGroupKind::Absolute, Vec::new(), vec![group_bond]);
+        assert_eq!(
+            get_all_atom_ids_for_stereo_group(&tetrahedral, &chiral_group, &chiral_map)
+                .expect("Chiral map entries do not expand an enhanced group"),
+            Vec::<AtomId>::new()
+        );
+    }
+
+    #[test]
+    fn cf_smi_groups_batch_preserves_typed_errors_and_precedence() {
+        let topology = group_topology([BondDirection::None; 3]);
+        let invalid_members = StereoGroup::new(
+            StereoGroupKind::Absolute,
+            vec![AtomId::new(99)],
+            vec![BondId::new(99)],
+        );
+        assert_eq!(
+            get_all_atom_ids_for_stereo_groups(
+                &topology,
+                std::slice::from_ref(&invalid_members),
+                &WedgeAssignments::default(),
+            ),
+            Err(AtropisomerError::StereoGroupAtomOutOfRange {
+                atom: AtomId::new(99),
+                atom_count: 4,
+            })
+        );
+
+        let invalid_bond = StereoGroup::new(StereoGroupKind::Or, Vec::new(), vec![BondId::new(99)]);
+        assert_eq!(
+            get_all_atom_ids_for_stereo_groups(
+                &topology,
+                &[
+                    StereoGroup::new(StereoGroupKind::Absolute, vec![AtomId::new(0)], Vec::new(),),
+                    invalid_bond
+                ],
+                &WedgeAssignments::default(),
+            ),
+            Err(AtropisomerError::StereoGroupBondOutOfRange {
+                bond: BondId::new(99),
+                bond_count: 3,
+            })
+        );
+
+        let mut invalid_topology = group_topology([BondDirection::None; 3]);
+        invalid_topology.bonds[0] = Bond::from_spec(
+            BondId::new(0),
+            BondSpec::new(AtomId::new(99), AtomId::new(1), BondOrder::Single),
+        );
+        assert!(matches!(
+            get_all_atom_ids_for_stereo_groups(
+                &invalid_topology,
+                &[StereoGroup::new(
+                    StereoGroupKind::Absolute,
+                    vec![AtomId::new(0)],
+                    Vec::new(),
+                )],
+                &WedgeAssignments::default(),
+            ),
+            Err(AtropisomerError::InvalidTopology {
+                source: TopologyValidationError::BondEndpointOutOfRange {
+                    bond,
+                    ..
+                }
+            })
+                if bond == BondId::new(0)
+        ));
+    }
+
+    #[test]
+    fn cf_smi_groups_batch_validates_topology_once_per_call() {
+        let topology = group_topology([BondDirection::None; 3]);
+        let groups = (0..12)
+            .map(|index| {
+                StereoGroup::new(
+                    StereoGroupKind::Or,
+                    vec![AtomId::new(index % 4)],
+                    Vec::new(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        reset_validation_count();
+        get_all_atom_ids_for_stereo_groups(&topology, &groups, &WedgeAssignments::default())
+            .expect("batch of twelve groups");
+        assert_eq!(validation_count(), 1);
+
+        reset_validation_count();
+        get_all_atom_ids_for_stereo_group(&topology, &groups[0], &WedgeAssignments::default())
+            .expect("checked singular group");
+        assert_eq!(validation_count(), 1);
+
+        reset_validation_count();
+        get_all_atom_ids_for_stereo_groups(&topology, &[], &WedgeAssignments::default())
+            .expect("empty checked batch still validates the topology");
+        assert_eq!(validation_count(), 1);
+    }
 }
 
 fn no_conf_direction(stereo: BondStereo, which_end: usize, which_bond: usize) -> BondDirection {

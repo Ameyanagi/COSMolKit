@@ -198,7 +198,7 @@ fn topological_queries_match_full_detached_rows_and_do_not_mutate_live_state() {
     );
     assert_eq!(
         source.atom(AtomId::new(0)).unwrap().prop("_CIPCode"),
-        Some("R")
+        Some(&cosmolkit_model::PropertyValue::from("R"))
     );
     assert!(std::ptr::eq(source.topology(), before.topology()));
     coordinate_views::assert_shared_coordinates(&source, &before);

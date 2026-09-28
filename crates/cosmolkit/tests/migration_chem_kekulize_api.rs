@@ -218,11 +218,23 @@ fn value_operation_preserves_identity_coordinates_stereo_and_ordinary_props() {
     assert_eq!(source.coordinates_2d(), output.coordinates_2d());
     assert_eq!(source.conformers_3d(), output.conformers_3d());
     assert_eq!(output.property("source"), Some("preserved"));
-    assert_eq!(output.atoms()[0].prop("atom-note"), Some("atom-0"));
-    assert_eq!(output.bonds()[0].prop("bond-note"), Some("bond-0"));
+    assert_eq!(
+        output.atoms()[0].prop("atom-note"),
+        Some(&cosmolkit_model::PropertyValue::from("atom-0"))
+    );
+    assert_eq!(
+        output.bonds()[0].prop("bond-note"),
+        Some(&cosmolkit_model::PropertyValue::from("bond-0"))
+    );
     assert_eq!(output.property("_CIPComputed"), Some("true"));
-    assert_eq!(output.atoms()[0].prop("_CIPCode"), Some("R"));
-    assert_eq!(output.bonds()[0].prop("_CIPCode"), Some("E"));
+    assert_eq!(
+        output.atoms()[0].prop("_CIPCode"),
+        Some(&cosmolkit_model::PropertyValue::from("R"))
+    );
+    assert_eq!(
+        output.bonds()[0].prop("_CIPCode"),
+        Some(&cosmolkit_model::PropertyValue::from("E"))
+    );
     assert!(output.atoms().iter().all(|atom| !atom.is_aromatic()));
     assert!(output.bonds().iter().all(|bond| !bond.is_aromatic()));
     assert_eq!(

@@ -107,12 +107,12 @@ fn properties(name: &str) -> MoleculeProperties {
         .with_sdf_property_list(SdfPropertyList::new(
             SdfPropertyListTarget::Atom,
             "atom_rows",
-            vec![Some("c".to_owned()), Some("n".to_owned())],
+            vec![Some(cosmolkit_model::PropertyValue::from("c")), Some(cosmolkit_model::PropertyValue::from("n"))],
         ))
         .with_sdf_property_list(SdfPropertyList::new(
             SdfPropertyListTarget::Bond,
             "bond_rows",
-            vec![Some("cn".to_owned())],
+            vec![Some(cosmolkit_model::PropertyValue::from("cn"))],
         ))
 }
 

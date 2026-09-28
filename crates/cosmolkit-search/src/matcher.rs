@@ -27,7 +27,7 @@ use crate::query_behavior::{
 use crate::{AtomQueryPredicate, BondQueryPredicate, QueryAtom, QueryBond, QueryGraph, QueryNode};
 use crate::{SearchTarget, SearchTargetAccess};
 use cosmolkit_core::PeriodicTableError;
-use cosmolkit_model::{Atom, Bond, Conformer3D, StereoGroupKind};
+use cosmolkit_model::{Atom, Bond, Conformer3D, PropertyValue, StereoGroupKind};
 use cosmolkit_types::{BondOrder, BondStereo, ChiralTag};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -721,8 +721,8 @@ impl Vf2Graph {
 // ---------------------------------------------------------------------------
 
 fn property_compat(
-    properties1: &BTreeMap<String, String>,
-    properties2: &BTreeMap<String, String>,
+    properties1: &BTreeMap<String, PropertyValue>,
+    properties2: &BTreeMap<String, PropertyValue>,
     properties: &[String],
 ) -> bool {
     // RDKit✔️🔝: bool propertyCompat(const RDProps *r1, const RDProps *r2,

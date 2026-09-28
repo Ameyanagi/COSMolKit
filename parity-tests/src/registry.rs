@@ -1,5 +1,6 @@
 //! Executable tasks, typed input families and parameter matrices.
 //! Future catalog rows are not executable registration or parity claims.
+pub mod fingerprint_corpus;
 pub mod molecule_plan;
 use serde::{Deserialize, Serialize};
 

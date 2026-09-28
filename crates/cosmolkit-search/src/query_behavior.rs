@@ -4721,7 +4721,9 @@ pub(crate) fn atom_predicate_matches_with_target_context(
 
         AtomQueryPredicate::HasProperty(name) => atom.prop(name).is_some(),
         AtomQueryPredicate::PropertyValue { name, value } => {
-            atom.prop(name) == Some(value.as_str())
+            atom.prop(name)
+                .and_then(|property| property.as_string().ok())
+                == Some(value.as_str())
         }
 
         // RDKit✔️✔️: R-group label.
@@ -4973,7 +4975,9 @@ pub(crate) fn bond_predicate_matches_with_target_context(
 
         BondQueryPredicate::HasProperty(name) => bond.prop(name).is_some(),
         BondQueryPredicate::PropertyValue { name, value } => {
-            bond.prop(name) == Some(value.as_str())
+            bond.prop(name)
+                .and_then(|property| property.as_string().ok())
+                == Some(value.as_str())
         }
 
         // RDKit✔️✔️: MolFile query code — preserved but not interpreted.

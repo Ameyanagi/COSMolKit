@@ -1147,20 +1147,17 @@ impl<'a, Access> OpParts<'a, Access> {
                     && candidate.atoms.iter().zip(&source.atoms).all(
                         |(candidate_atom, source_atom)| {
                             let mut expected = source_atom.clone();
+                            let mut actual = candidate_atom.clone();
+                            // Compare all unowned state, including property types,
+                            // computed flags and relative insertion order. The CIP
+                            // owner clears/reinserts its own keys; reconstructing
+                            // them in a fixed order invents a constraint absent
+                            // from the operation contract.
                             for key in ATOM_KEYS {
                                 expected.clear_prop(key);
-                                if let Some(value) = candidate_atom.prop(key) {
-                                    let result = if candidate_atom.is_prop_computed(key) {
-                                        expected.set_computed_prop(key, value)
-                                    } else {
-                                        expected.set_prop(key, value)
-                                    };
-                                    if result.is_err() {
-                                        return false;
-                                    }
-                                }
+                                actual.clear_prop(key);
                             }
-                            expected == *candidate_atom
+                            expected == actual
                         },
                     );
                 let bonds_only_change_cip = candidate.bonds.len() == source.bonds.len()
@@ -1195,24 +1192,16 @@ impl<'a, Access> OpParts<'a, Access> {
                             }
 
                             let mut expected = source_bond.clone();
+                            let mut actual = candidate_bond.clone();
                             expected.set_stereo_atoms(candidate_bond.stereo_atoms());
                             if expected.set_stereo(candidate_bond.stereo()).is_err() {
                                 return false;
                             }
                             for key in BOND_KEYS {
                                 expected.clear_prop(key);
-                                if let Some(value) = candidate_bond.prop(key) {
-                                    let result = if candidate_bond.is_prop_computed(key) {
-                                        expected.set_computed_prop(key, value)
-                                    } else {
-                                        expected.set_prop(key, value)
-                                    };
-                                    if result.is_err() {
-                                        return false;
-                                    }
-                                }
+                                actual.clear_prop(key);
                             }
-                            expected == *candidate_bond
+                            expected == actual
                         },
                     );
                 let topology_identity_is_stable = atoms_only_change_cip

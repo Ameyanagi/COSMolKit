@@ -192,11 +192,11 @@ fn value_operation_assigns_rows_and_preserves_mapping_coordinates_stereo_and_pro
     assert_eq!(output.property("source"), Some("preserved"));
     assert_eq!(
         output.atom(AtomId::new(0)).unwrap().prop("atom-label"),
-        Some("carbon")
+        Some(&cosmolkit_model::PropertyValue::from("carbon"))
     );
     assert_eq!(
         output.bond(BondId::new(0)).unwrap().prop("bond-label"),
-        Some("single")
+        Some(&cosmolkit_model::PropertyValue::from("single"))
     );
     assert_eq!(output.property("_CIPComputed"), None);
     assert_eq!(output.atom(AtomId::new(0)).unwrap().prop("_CIPCode"), None);
@@ -210,11 +210,11 @@ fn value_operation_assigns_rows_and_preserves_mapping_coordinates_stereo_and_pro
     assert_eq!(source.property("_CIPComputed"), Some("true"));
     assert_eq!(
         source.atom(AtomId::new(0)).unwrap().prop("_CIPCode"),
-        Some("R")
+        Some(&cosmolkit_model::PropertyValue::from("R"))
     );
     assert_eq!(
         source.bond(BondId::new(0)).unwrap().prop("_CIPBondCode"),
-        Some("E")
+        Some(&cosmolkit_model::PropertyValue::from("E"))
     );
     assert!(!std::ptr::eq(source.topology(), output.topology()));
     assert!(!std::ptr::eq(source.properties(), output.properties()));

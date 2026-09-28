@@ -217,7 +217,7 @@ fn public_constructor_preserves_cx_name_stereo_and_properties() {
     assert_eq!(molecule.num_atoms(), 5);
     assert_eq!(
         molecule.topology().atoms[0].prop("atomLabel"),
-        Some("fluoro")
+        Some(&cosmolkit_model::PropertyValue::from("fluoro"))
     );
     assert_eq!(
         molecule.topology().atoms[1].chiral_tag(),

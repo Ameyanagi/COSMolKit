@@ -1,13 +1,14 @@
 // RDKit marker convention defined in dev/source_reproduction_protocol.md.
 
 use std::{
+    borrow::Cow,
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, VecDeque},
 };
 
 use crate::{
     RingFindType, RingFindingError, RingInfo, ValenceAssignment, ValenceError, ValenceModel,
-    fast_find_rings_from_parts,
+    fast_find_rings_from_parts, find_sssr_from_parts,
 };
 use cosmolkit_model::{
     AdjacencyList, Atom, AtomId, Bond, BondId, QueryStateError, QueryStateRef, StereoGroupKind,
@@ -28,6 +29,29 @@ pub enum CanonicalRankError {
     AtomMaskLength { expected: usize, actual: usize },
     #[error("bond mask length {actual} does not match topology bond count {expected}")]
     BondMaskLength { expected: usize, actual: usize },
+    #[error("atom symbol length {actual} does not match topology atom count {expected}")]
+    AtomSymbolLength { expected: usize, actual: usize },
+    #[error("bond symbol length {actual} does not match topology bond count {expected}")]
+    BondSymbolLength { expected: usize, actual: usize },
+    #[error(
+        "prepared valence dimensions explicit={explicit_len}, implicit={implicit_len} do not match {atom_count} atoms"
+    )]
+    PreparedValenceLength {
+        atom_count: usize,
+        explicit_len: usize,
+        implicit_len: usize,
+    },
+    #[error("prepared valence is invalid for atom {atom_index}")]
+    PreparedValenceInvalid { atom_index: usize },
+    #[error(
+        "prepared ring dimensions atoms={actual_atoms}, bonds={actual_bonds} do not match topology atoms={expected_atoms}, bonds={expected_bonds}"
+    )]
+    PreparedRingLength {
+        expected_atoms: usize,
+        actual_atoms: usize,
+        expected_bonds: usize,
+        actual_bonds: usize,
+    },
     #[error("incomplete RDKit canonical-rank port for {branch}: {reason}")]
     ProtocolDebt {
         branch: &'static str,
@@ -356,7 +380,17 @@ fn prepare_kekulize_selection(
     // RDKit✔️✔️:   return;
     // RDKit✔️✔️: }
     let rings = if found_aromatic {
-        fast_find_rings_from_parts(topology.atoms.len(), &topology.bonds, &topology.adjacency)?
+        // BEGIN RDKIT CPP FUNCTION KekulizeFragment ring selection
+        // RDKit✔️✔️: VECT_INT_VECT allringsSSSR;
+        // RDKit✔️✔️: if (!mol.getRingInfo()->isInitialized()) {
+        // RDKit✔️✔️:   MolOps::findSSSR(mol, allringsSSSR);
+        // RDKit✔️✔️: }
+        // RDKit✔️✔️: const VECT_INT_VECT &allrings =
+        // RDKit✔️✔️:     allringsSSSR.empty() ? mol.getRingInfo()->atomRings() : allringsSSSR;
+        // Detached TopologyBlock has no RingInfo input, so this owner follows
+        // the source's uninitialized-state SSSR branch after canonical rank's
+        // temporary fast-ring preparation has been reset.
+        find_sssr_from_parts(topology.atoms.len(), &topology.bonds, &topology.adjacency)?
     } else {
         RingInfo::new(
             RingFindType::Fast,
@@ -1849,6 +1883,30 @@ pub fn kekulize(
     kekulize_with_query_state(topology, params, None)
 }
 
+/// Kekulizes selected original-index atoms and bonds in a detached topology.
+pub fn kekulize_selected_fragment(
+    topology: &TopologyBlock,
+    atoms_in_play: &[bool],
+    bonds_in_play: &[bool],
+    params: &KekulizeParams,
+) -> Result<KekulizeAssignment, KekulizeError> {
+    // BEGIN RDKIT CPP FUNCTION SmilesWrite::FragmentSmilesConstruct selected kekulization
+    // RDKit✔️❌:     if (atomsInPlay && bondsInPlay) {
+    // RDKit✔️❌:       MolOps::details::KekulizeFragment(static_cast<RWMol &>(mol), *atomsInPlay,
+    // RDKit✔️❌:                                         *bondsInPlay);
+    // RDKit✔️❌:     } else {
+    // RDKit✔️❌:       MolOps::Kekulize(static_cast<RWMol &>(mol));
+    // RDKit✔️❌:     }
+    // END RDKIT CPP FUNCTION SmilesWrite::FragmentSmilesConstruct selected kekulization
+    // Behavior: the caller supplies both original-index masks, so the single
+    // core masked owner performs source validation and all selected chemistry.
+    // Cost: detached return ownership clones the topology, including the
+    // source early-return path; the upstream caller mutates its private copy.
+    Ok(KekulizeAssignment {
+        topology: kekulize_fragment(topology, atoms_in_play, bonds_in_play, params, None)?,
+    })
+}
+
 #[doc(hidden)]
 pub fn kekulize_with_query_state(
     topology: &TopologyBlock,
@@ -1955,8 +2013,8 @@ struct CanonRankReadView<'a> {
     atoms: &'a [Atom],
     bonds: &'a [Bond],
     adjacency: &'a AdjacencyList,
-    rings: RingInfo,
-    valence: ValenceAssignment,
+    rings: Cow<'a, RingInfo>,
+    valence: Cow<'a, ValenceAssignment>,
 }
 
 impl<'a> CanonRankReadView<'a> {
@@ -1986,8 +2044,66 @@ impl<'a> CanonRankReadView<'a> {
             atoms,
             bonds,
             adjacency,
+            rings: Cow::Owned(rings),
+            valence: Cow::Owned(valence),
+        })
+    }
+
+    fn from_prepared_state(
+        topology: &'a TopologyBlock,
+        valence: &'a ValenceAssignment,
+        rings: Option<&'a RingInfo>,
+    ) -> Result<Self, CanonicalRankError> {
+        // RDKit✔️✔️:   if (!mol.getRingInfo()->isFindFastOrBetter()) {
+        // RDKit✔️✔️:     MolOps::fastFindRings(mol);
+        // RDKit✔️✔️:     clearRings = true;
+        // RDKit✔️✔️:   }
+        // A caller supplies already prepared property-cache values for this
+        // exact topology. Check dimensions and source per-atom validity before
+        // borrowing; a missing/unknown ring set uses the one existing fast
+        // owner. Borrowing is O(1) and avoids duplicate O(V+E) preparation.
+        if valence.explicit_valence.len() != topology.atoms.len()
+            || valence.implicit_hydrogens.len() != topology.atoms.len()
+        {
+            return Err(CanonicalRankError::PreparedValenceLength {
+                atom_count: topology.atoms.len(),
+                explicit_len: valence.explicit_valence.len(),
+                implicit_len: valence.implicit_hydrogens.len(),
+            });
+        }
+        for (atom_index, atom) in topology.atoms.iter().enumerate() {
+            if valence.explicit_valence[atom_index] < 0
+                || (!atom.no_implicit() && valence.implicit_hydrogens[atom_index] < 0)
+            {
+                return Err(CanonicalRankError::PreparedValenceInvalid { atom_index });
+            }
+        }
+        if let Some(rings) = rings
+            && (rings.atom_row_count() != topology.atoms.len()
+                || rings.bond_row_count() != topology.bonds.len())
+        {
+            return Err(CanonicalRankError::PreparedRingLength {
+                expected_atoms: topology.atoms.len(),
+                actual_atoms: rings.atom_row_count(),
+                expected_bonds: topology.bonds.len(),
+                actual_bonds: rings.bond_row_count(),
+            });
+        }
+        let rings = if let Some(rings) = rings.filter(|rings| rings.is_find_fast_or_better()) {
+            Cow::Borrowed(rings)
+        } else {
+            Cow::Owned(fast_find_rings_from_parts(
+                topology.atoms.len(),
+                &topology.bonds,
+                &topology.adjacency,
+            )?)
+        };
+        Ok(Self {
+            atoms: &topology.atoms,
+            bonds: &topology.bonds,
+            adjacency: &topology.adjacency,
             rings,
-            valence,
+            valence: Cow::Borrowed(valence),
         })
     }
 
@@ -2138,6 +2254,67 @@ pub fn rank_fragment_atoms(
     atoms_in_play: &[bool],
     bonds_in_play: &[bool],
 ) -> Result<Vec<usize>, CanonicalRankError> {
+    rank_fragment_atoms_with_params(
+        topology,
+        atoms_in_play,
+        bonds_in_play,
+        None,
+        None,
+        &CanonicalRankParams::kekulize_fragment_default(),
+    )
+}
+
+/// Ranks an original-index fragment with source symbol tables and options.
+pub fn rank_fragment_atoms_with_params(
+    topology: &TopologyBlock,
+    atoms_in_play: &[bool],
+    bonds_in_play: &[bool],
+    atom_symbols: Option<&[String]>,
+    bond_symbols: Option<&[String]>,
+    params: &CanonicalRankParams,
+) -> Result<Vec<usize>, CanonicalRankError> {
+    rank_fragment_atoms_engine(
+        topology,
+        atoms_in_play,
+        bonds_in_play,
+        atom_symbols,
+        bond_symbols,
+        params,
+        None,
+    )
+}
+
+/// Ranks a fragment while borrowing exact-topology prepared valence and rings.
+pub fn rank_fragment_atoms_with_prepared_state(
+    topology: &TopologyBlock,
+    valence: &ValenceAssignment,
+    rings: Option<&RingInfo>,
+    atoms_in_play: &[bool],
+    bonds_in_play: &[bool],
+    atom_symbols: Option<&[String]>,
+    bond_symbols: Option<&[String]>,
+    params: &CanonicalRankParams,
+) -> Result<Vec<usize>, CanonicalRankError> {
+    rank_fragment_atoms_engine(
+        topology,
+        atoms_in_play,
+        bonds_in_play,
+        atom_symbols,
+        bond_symbols,
+        params,
+        Some((valence, rings)),
+    )
+}
+
+fn rank_fragment_atoms_engine(
+    topology: &TopologyBlock,
+    atoms_in_play: &[bool],
+    bonds_in_play: &[bool],
+    atom_symbols: Option<&[String]>,
+    bond_symbols: Option<&[String]>,
+    params: &CanonicalRankParams,
+    prepared: Option<(&ValenceAssignment, Option<&RingInfo>)>,
+) -> Result<Vec<usize>, CanonicalRankError> {
     // BEGIN RDKIT CPP FUNCTION: third_party/rdkit/Code/GraphMol/new_canon.cpp :: rankFragmentAtoms
     // RDKit✔️✔️: void rankFragmentAtoms(const ROMol &mol, std::vector<unsigned int> &res,
     // RDKit✔️✔️:                        const boost::dynamic_bitset<> &atomsInPlay,
@@ -2149,6 +2326,8 @@ pub fn rank_fragment_atoms(
     // RDKit✔️✔️:                        bool includeChiralPresence, bool includeRingStereo) {
     // RDKit✔️✔️: PRECONDITION(atomsInPlay.size() == mol.getNumAtoms(), "bad atomsInPlay size");
     // RDKit✔️✔️: PRECONDITION(bondsInPlay.size() == mol.getNumBonds(), "bad bondsInPlay size");
+    // Symbol and mask validation is O(1) per table; the existing ranking
+    // engine retains its source-shaped partitions and original-index output.
     if atoms_in_play.len() != topology.atoms.len() {
         return Err(CanonicalRankError::AtomMaskLength {
             expected: topology.atoms.len(),
@@ -2159,6 +2338,26 @@ pub fn rank_fragment_atoms(
         return Err(CanonicalRankError::BondMaskLength {
             expected: topology.bonds.len(),
             actual: bonds_in_play.len(),
+        });
+    }
+    // RDKit✔️✔️: PRECONDITION(!atomSymbols || atomSymbols->size() == mol.getNumAtoms(),
+    // RDKit✔️✔️:              "bad atomSymbols size");
+    // RDKit✔️✔️: PRECONDITION(!bondSymbols || bondSymbols->size() == mol.getNumBonds(),
+    // RDKit✔️✔️:              "bad bondSymbols size");
+    if let Some(symbols) = atom_symbols
+        && symbols.len() != topology.atoms.len()
+    {
+        return Err(CanonicalRankError::AtomSymbolLength {
+            expected: topology.atoms.len(),
+            actual: symbols.len(),
+        });
+    }
+    if let Some(symbols) = bond_symbols
+        && symbols.len() != topology.bonds.len()
+    {
+        return Err(CanonicalRankError::BondSymbolLength {
+            expected: topology.bonds.len(),
+            actual: symbols.len(),
         });
     }
     // RDKit✔️✔️: if (!mol.getNumAtoms()) {
@@ -2176,18 +2375,34 @@ pub fn rank_fragment_atoms(
     // RDKit✔️✔️:   std::vector<Canon::canon_atom> atoms(mol.getNumAtoms());
     // RDKit✔️✔️:   detail::initFragmentCanonAtoms(mol, atoms, includeChirality, atomSymbols,
     // RDKit✔️✔️:                                  bondSymbols, atomsInPlay, bondsInPlay, true);
-    let view = CanonRankReadView::from_topology(topology)?;
+    let view = if let Some((valence, rings)) = prepared {
+        CanonRankReadView::from_prepared_state(topology, valence, rings)?
+    } else {
+        CanonRankReadView::from_topology(topology)?
+    };
     let mut atoms = init_fragment_canon_atoms(
         &view,
         atoms_in_play,
         bonds_in_play,
-        CanonicalRankParams::kekulize_fragment_default().include_chirality,
+        params.include_chirality,
+        atom_symbols,
+        bond_symbols,
     )?;
-    rank_initialized_atoms(
-        &view,
-        &mut atoms,
-        CanonicalRankParams::kekulize_fragment_default(),
-    )
+    // RDKit✔️✔️:   ftor.df_useIsotopes = includeIsotopes;
+    // RDKit✔️✔️:   ftor.df_useChirality = includeChirality;
+    // RDKit✔️✔️:   ftor.df_useAtomMaps = includeAtomMaps;
+    // RDKit✔️✔️:   ftor.df_useChiralityRings = includeChirality;
+    // RDKit✔️✔️:   ftor.df_useChiralPresence = includeChiralPresence;
+    // RDKit✔️✔️:   detail::rankWithFunctor(ftor, breakTies, order, true, includeChirality,
+    // RDKit✔️✔️:                           includeRingStereo, &atomsInPlay, &bondsInPlay);
+    let mut fragment_params = *params;
+    fragment_params.include_stereo_groups = false;
+    fragment_params.use_non_stereo_ranks = false;
+    // The source fragment path always enables the chirality-ring comparison
+    // when chirality is enabled; the whole-molecule path also gates on ring
+    // stereo. These are independent policy branches within the same engine.
+    fragment_params.chirality_rings_use_ring_stereo = false;
+    rank_initialized_atoms(&view, &mut atoms, fragment_params)
     // RDKit✔️✔️:   if (clearRings) {
     // RDKit✔️✔️:     mol.getRingInfo()->reset();
     // RDKit✔️✔️:   }
@@ -2434,7 +2649,12 @@ fn empty_canon_atom_from_source_atom(atom: &Atom) -> CanonAtom<'static> {
         atom_map: atom.atom_map().unwrap_or(0),
         canonical_ranking_number: atom
             .prop("_CanonicalRankingNumber")
-            .and_then(|value| value.parse::<i32>().ok())
+            .and_then(|value| match value {
+                cosmolkit_model::PropertyValue::Int(value) => Some(*value),
+                cosmolkit_model::PropertyValue::String(value) => value.parse::<i32>().ok(),
+                cosmolkit_model::PropertyValue::Double(_)
+                | cosmolkit_model::PropertyValue::Bool(_) => None,
+            })
             .unwrap_or(0),
         formal_charge: atom.formal_charge(),
         chiral_tag: atom.chiral_tag(),
@@ -2470,8 +2690,14 @@ fn init_canon_atoms(
     // RDKit✔️✔️:   }
     let atoms_in_play = vec![true; view.num_atoms()];
     let bonds_in_play = vec![true; view.bonds.len()];
-    let mut atoms =
-        init_fragment_canon_atoms(view, &atoms_in_play, &bonds_in_play, include_chirality)?;
+    let mut atoms = init_fragment_canon_atoms(
+        view,
+        &atoms_in_play,
+        &bonds_in_play,
+        include_chirality,
+        None,
+        None,
+    )?;
     // RDKit✔️✔️:   if (includeChirality && includeStereoGroups) {
     // RDKit✔️✔️:     unsigned int sgidx = 1;
     // RDKit✔️✔️:     for (auto &sg : mol.getStereoGroups()) {
@@ -2500,12 +2726,14 @@ fn init_canon_atoms(
     Ok(atoms)
 }
 
-fn init_fragment_canon_atoms(
+fn init_fragment_canon_atoms<'a>(
     view: &CanonRankReadView<'_>,
     atoms_in_play: &[bool],
     bonds_in_play: &[bool],
     include_chirality: bool,
-) -> Result<Vec<CanonAtom<'static>>, CanonicalRankError> {
+    atom_symbols: Option<&'a [String]>,
+    bond_symbols: Option<&'a [String]>,
+) -> Result<Vec<CanonAtom<'a>>, CanonicalRankError> {
     // BEGIN RDKIT CPP FUNCTION: third_party/rdkit/Code/GraphMol/new_canon.cpp :: detail::initFragmentCanonAtoms
     // RDKit✔️✔️: void initFragmentCanonAtoms(const ROMol &mol,
     // RDKit✔️✔️:                             std::vector<Canon::canon_atom> &atoms,
@@ -2516,6 +2744,9 @@ fn init_fragment_canon_atoms(
     // RDKit✔️✔️:                             const boost::dynamic_bitset<> &bondsInPlay,
     // RDKit✔️✔️:                             bool needsInit) {
     // RDKit✔️✔️:   needsInit = true;
+    // Symbol references borrow caller storage without per-atom or per-bond
+    // string allocation. Each included bond assigns both holder references
+    // in its existing O(B) initialization pass.
     let mut atoms = view
         .atoms
         .iter()
@@ -2529,7 +2760,11 @@ fn init_fragment_canon_atoms(
     // RDKit✔️✔️:     atomsi.index = i;
     // RDKit✔️✔️:     atomsi.degree = 0;
     // RDKit✔️✔️:     if (atomsInPlay[i]) {
-    // RDKit✔️✔️:       atomsi.p_symbol = nullptr;
+    // RDKit✔️✔️:       if (atomSymbols) {
+    // RDKit✔️✔️:         atomsi.p_symbol = &(*atomSymbols)[i];
+    // RDKit✔️✔️:       } else {
+    // RDKit✔️✔️:         atomsi.p_symbol = nullptr;
+    // RDKit✔️✔️:       }
     // RDKit✔️✔️:       if (needsInit) {
     // RDKit✔️✔️:         atomsi.nbrIds = std::make_unique<int[]>(atom->getDegree());
     // RDKit✔️✔️:         advancedInitCanonAtom(mol, atomsi, i);
@@ -2546,6 +2781,7 @@ fn init_fragment_canon_atoms(
         if !atoms_in_play[atom_idx] {
             continue;
         }
+        atoms[atom_idx].p_symbol = atom_symbols.map(|symbols| symbols[atom_idx].as_str());
         let atom = &view.atoms[atom_idx];
         atoms[atom_idx].total_num_hs = usize::from(atom.explicit_hydrogens())
             + usize::try_from(view.valence.implicit_hydrogens[atom_idx].max(0))
@@ -2575,6 +2811,10 @@ fn init_fragment_canon_atoms(
     // RDKit✔️✔️:           makeBondHolder(bond, bond->getEndAtomIdx(), includeChirality, atoms));
     // RDKit✔️✔️:       endAt.bonds.push_back(makeBondHolder(bond, bond->getBeginAtomIdx(),
     // RDKit✔️✔️:                                            includeChirality, atoms));
+    // RDKit✔️✔️:       if (bondSymbols) {
+    // RDKit✔️✔️:         begAt.bonds.back().p_symbol = &(*bondSymbols)[bond->getIdx()];
+    // RDKit✔️✔️:         endAt.bonds.back().p_symbol = &(*bondSymbols)[bond->getIdx()];
+    // RDKit✔️✔️:       }
     // RDKit✔️✔️:     }
     // RDKit✔️✔️:   }
     for (bond_idx, bond) in view.bonds.iter().enumerate() {
@@ -2589,8 +2829,12 @@ fn init_fragment_canon_atoms(
         atoms[end].degree += 1;
         atoms[end].all_nbr_ids.push(begin);
         atoms[end].nbr_ids.push(begin);
-        let begin_holder = make_canon_bond_holder(view, bond_idx, end, include_chirality)?;
-        let end_holder = make_canon_bond_holder(view, bond_idx, begin, include_chirality)?;
+        let mut begin_holder = make_canon_bond_holder(view, bond_idx, end, include_chirality)?;
+        let mut end_holder = make_canon_bond_holder(view, bond_idx, begin, include_chirality)?;
+        if let Some(symbols) = bond_symbols {
+            begin_holder.p_symbol = Some(symbols[bond_idx].as_str());
+            end_holder.p_symbol = Some(symbols[bond_idx].as_str());
+        }
         atoms[begin].bonds.push(begin_holder);
         atoms[end].bonds.push(end_holder);
     }
@@ -4814,6 +5058,227 @@ mod tests {
     }
 
     #[test]
+    fn selected_kekulize_contract_checks_both_full_index_mask_lengths_before_empty_return() {
+        let graph = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C)),
+                atom(1, AtomSpec::new(Element::C)),
+            ],
+            vec![bond(0, 0, 1)],
+        );
+        let before = graph.clone();
+        let atoms = [false, false];
+        let bonds = [true];
+        assert_eq!(
+            kekulize_selected_fragment(&graph, &[false], &[], &KekulizeParams::default()),
+            Err(KekulizeError::AtomSelectionLength {
+                expected: 2,
+                actual: 1,
+            })
+        );
+        assert_eq!(
+            kekulize_selected_fragment(&graph, &atoms, &[], &KekulizeParams::default()),
+            Err(KekulizeError::BondSelectionLength {
+                expected: 1,
+                actual: 0,
+            })
+        );
+        assert_eq!(graph, before);
+        assert_eq!(atoms, [false, false]);
+        assert_eq!(bonds, [true]);
+    }
+
+    #[test]
+    fn selected_kekulize_contract_keeps_original_ids_and_caller_state() {
+        let graph = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C)),
+                atom(1, AtomSpec::new(Element::C)),
+            ],
+            vec![bond(0, 0, 1)],
+        );
+        let before = graph.clone();
+        let none = [false, false];
+        let selected_atom = [true, false];
+        let selected_bond = [true];
+        let unselected_bond = [false];
+        for (atoms, bonds) in [
+            (&none[..], &selected_bond[..]),
+            (&selected_atom[..], &selected_bond[..]),
+            (&selected_atom[..], &unselected_bond[..]),
+        ] {
+            let original_atoms = atoms.to_vec();
+            let original_bonds = bonds.to_vec();
+            let result = kekulize_selected_fragment(&graph, atoms, bonds, &Default::default())
+                .expect("source accepts independent original-index selection masks");
+            assert_eq!(result.topology, before);
+            assert_eq!(atoms, original_atoms);
+            assert_eq!(bonds, original_bonds);
+        }
+        assert_eq!(graph, before);
+    }
+
+    fn selected_kekulize_behavior_ring_pair() -> TopologyBlock {
+        topology(
+            (0..12)
+                .map(|id| atom(id, AtomSpec::new(Element::C).with_aromatic(true)))
+                .collect(),
+            [
+                (0, 1),
+                (1, 2),
+                (2, 3),
+                (3, 4),
+                (4, 5),
+                (5, 0),
+                (6, 7),
+                (7, 8),
+                (8, 9),
+                (9, 10),
+                (10, 11),
+                (11, 6),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(id, (begin, end))| aromatic_bond(id, begin, end))
+            .collect(),
+        )
+    }
+
+    #[test]
+    fn selected_kekulize_behavior_full_masks_match_whole_entry_for_both_flags() {
+        let graph = selected_kekulize_behavior_ring_pair();
+        let before = graph.clone();
+        for mark_atoms_bonds in [false, true] {
+            for canonical in [false, true] {
+                let params = KekulizeParams {
+                    mark_atoms_bonds,
+                    canonical,
+                    ..Default::default()
+                };
+                let selected =
+                    kekulize_selected_fragment(&graph, &[true; 12], &[true; 12], &params).unwrap();
+                assert_eq!(selected, kekulize(&graph, &params).unwrap());
+            }
+        }
+        assert_eq!(graph, before);
+    }
+
+    #[test]
+    fn selected_kekulize_behavior_partial_ring_preserves_original_unselected_rows() {
+        let graph = selected_kekulize_behavior_ring_pair();
+        let before = graph.clone();
+        let mut atoms = [false; 12];
+        atoms[0] = true;
+        atoms[1] = true;
+        let mut bonds = [false; 12];
+        bonds[0] = true;
+        let result = kekulize_selected_fragment(&graph, &atoms, &bonds, &Default::default())
+            .expect("pinned partial ring has no wholly selected candidate ring");
+        assert_eq!(result.topology.atoms.len(), 12);
+        assert_eq!(result.topology.bonds.len(), 12);
+        assert!(!result.topology.atoms[0].is_aromatic());
+        assert!(!result.topology.atoms[1].is_aromatic());
+        assert!(!result.topology.bonds[0].is_aromatic());
+        assert_eq!(result.topology.bonds[0].order(), BondOrder::Aromatic);
+        assert_eq!(&result.topology.atoms[2..], &before.atoms[2..]);
+        assert_eq!(&result.topology.bonds[1..], &before.bonds[1..]);
+        assert_ne!(
+            result.topology,
+            kekulize(&graph, &Default::default()).unwrap().topology
+        );
+        assert_eq!(graph, before);
+        assert_eq!(atoms.iter().filter(|selected| **selected).count(), 2);
+        assert_eq!(bonds.iter().filter(|selected| **selected).count(), 1);
+    }
+
+    #[test]
+    fn selected_kekulize_behavior_disconnected_ring_keeps_unselected_component() {
+        let graph = selected_kekulize_behavior_ring_pair();
+        let before = graph.clone();
+        let atoms = [
+            true, true, true, true, true, true, false, false, false, false, false, false,
+        ];
+        let bonds = atoms;
+        let result = kekulize_selected_fragment(&graph, &atoms, &bonds, &Default::default())
+            .expect("one fully selected aromatic component is kekulizable");
+        assert!(
+            result.topology.atoms[..6]
+                .iter()
+                .all(|atom| !atom.is_aromatic())
+        );
+        assert!(
+            result.topology.bonds[..6]
+                .iter()
+                .all(|bond| !bond.is_aromatic())
+        );
+        assert_eq!(&result.topology.atoms[6..], &before.atoms[6..]);
+        assert_eq!(&result.topology.bonds[6..], &before.bonds[6..]);
+        assert_eq!(graph, before);
+    }
+
+    #[test]
+    fn selected_kekulize_behavior_full_nonring_aromatic_atom_reports_source_error() {
+        let graph = topology(
+            vec![atom(0, AtomSpec::new(Element::C).with_aromatic(true))],
+            vec![],
+        );
+        let before = graph.clone();
+        assert_eq!(
+            kekulize_selected_fragment(&graph, &[true], &[], &Default::default()),
+            Err(KekulizeError::AromaticAtomOutsideRing {
+                atom: AtomId::new(0)
+            })
+        );
+        assert_eq!(graph, before);
+    }
+
+    #[test]
+    fn selected_kekulize_behavior_uninitialized_rings_use_pinned_sssr_rows() {
+        let graph = topology(
+            (0..10)
+                .map(|id| atom(id, AtomSpec::new(Element::C).with_aromatic(true)))
+                .collect(),
+            [
+                (0, 1),
+                (1, 2),
+                (2, 3),
+                (3, 4),
+                (4, 5),
+                (5, 6),
+                (6, 7),
+                (7, 8),
+                (8, 9),
+                (9, 0),
+                (8, 3),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(id, (begin, end))| aromatic_bond(id, begin, end))
+            .collect(),
+        );
+        let selected = [true; 10];
+        let prepared = prepare_kekulize_selection(&graph, &selected, &[true; 11], None).unwrap();
+        let atom_rows = prepared
+            .candidate_atom_rings
+            .iter()
+            .map(|ring| ring.iter().map(|atom| atom.index()).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let bond_rows = prepared
+            .candidate_bond_rings
+            .iter()
+            .map(|ring| ring.iter().map(|bond| bond.index()).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            atom_rows,
+            vec![vec![0, 9, 8, 3, 2, 1], vec![4, 5, 6, 7, 8, 3]]
+        );
+        assert_eq!(
+            bond_rows,
+            vec![vec![9, 8, 10, 2, 1, 0], vec![4, 5, 6, 7, 10, 3]]
+        );
+    }
+
+    #[test]
     fn q05_core_sanitize_query_consumers_kekulize_recurses_through_bond_type_queries() {
         let graph = topology(
             vec![
@@ -4888,6 +5353,450 @@ mod tests {
     }
 
     #[test]
+    fn fragment_rank_symbols_reverse_original_index_order_without_changing_text() {
+        // Pinned MolFragmentToSmiles(CCO) with N/O/S and S/O/N produces
+        // identical NOS text but output atom orders [0,1,2] and [2,1,0].
+        // The direct pinned CanonicalRankAtomsInFragment oracle returns
+        // [0,2,1] and [1,2,0]: traversal order is not the rank vector.
+        let graph = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C)),
+                atom(1, AtomSpec::new(Element::C)),
+                atom(2, AtomSpec::new(Element::O)),
+            ],
+            vec![bond(0, 0, 1), bond(1, 1, 2)],
+        );
+        let options = CanonicalRankParams::kekulize_fragment_default();
+        let first = ["N".to_owned(), "O".to_owned(), "S".to_owned()];
+        let reverse = ["S".to_owned(), "O".to_owned(), "N".to_owned()];
+        let plain =
+            rank_fragment_atoms_with_params(&graph, &[true; 3], &[true; 2], None, None, &options)
+                .unwrap();
+        assert_eq!(
+            plain,
+            rank_fragment_atoms(&graph, &[true; 3], &[true; 2]).unwrap()
+        );
+        assert_eq!(
+            rank_fragment_atoms_with_params(
+                &graph,
+                &[true; 3],
+                &[true; 2],
+                Some(&first),
+                None,
+                &options,
+            ),
+            Ok(vec![0, 2, 1])
+        );
+        assert_eq!(
+            rank_fragment_atoms_with_params(
+                &graph,
+                &[true; 3],
+                &[true; 2],
+                Some(&reverse),
+                None,
+                &options,
+            ),
+            Ok(vec![1, 2, 0])
+        );
+    }
+
+    #[test]
+    fn fragment_rank_symbols_borrow_both_bond_holders_and_respect_independent_masks() {
+        let graph = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C)),
+                atom(1, AtomSpec::new(Element::C)),
+                atom(2, AtomSpec::new(Element::O)),
+            ],
+            vec![bond(0, 0, 1), bond(1, 1, 2)],
+        );
+        let view = CanonRankReadView::from_topology(&graph).unwrap();
+        let atoms = ["N".to_owned(), "O".to_owned(), "S".to_owned()];
+        let first = ["-".to_owned(), "=".to_owned()];
+        let reverse = ["=".to_owned(), "-".to_owned()];
+        for symbols in [&first[..], &reverse[..]] {
+            let initialized = init_fragment_canon_atoms(
+                &view,
+                &[true; 3],
+                &[true; 2],
+                true,
+                Some(&atoms),
+                Some(symbols),
+            )
+            .unwrap();
+            assert_eq!(initialized[0].p_symbol, Some("N"));
+            assert_eq!(initialized[1].p_symbol, Some("O"));
+            assert_eq!(initialized[2].p_symbol, Some("S"));
+            for (bond_index, symbol) in symbols.iter().enumerate() {
+                let bond = &graph.bonds[bond_index];
+                for endpoint in [bond.begin().index(), bond.end().index()] {
+                    assert!(
+                        initialized[endpoint]
+                            .bonds
+                            .iter()
+                            .any(|holder| holder.bond_idx == bond_index
+                                && holder.p_symbol == Some(symbol.as_str()))
+                    );
+                }
+            }
+            let masked_bond = init_fragment_canon_atoms(
+                &view,
+                &[true; 3],
+                &[true, false],
+                true,
+                Some(&atoms),
+                Some(symbols),
+            )
+            .unwrap();
+            assert!(masked_bond[2].bonds.is_empty());
+            let masked_atom = init_fragment_canon_atoms(
+                &view,
+                &[true, true, false],
+                &[true; 2],
+                true,
+                Some(&atoms),
+                Some(symbols),
+            )
+            .unwrap();
+            assert_eq!(masked_atom[2].p_symbol, None);
+            assert!(masked_atom[2].bonds.is_empty());
+            assert_eq!(masked_atom[1].bonds.len(), 1);
+        }
+        // Pinned writer emits C-C=O and C=C-O for these two bond tables.
+        let options = CanonicalRankParams::kekulize_fragment_default();
+        for symbols in [&first[..], &reverse[..]] {
+            assert_eq!(
+                rank_fragment_atoms_with_params(
+                    &graph,
+                    &[true; 3],
+                    &[true; 2],
+                    None,
+                    Some(symbols),
+                    &options,
+                )
+                .unwrap()
+                .len(),
+                3
+            );
+        }
+    }
+
+    #[test]
+    fn fragment_rank_symbols_validate_exact_lengths_before_empty_return() {
+        let graph = topology(vec![atom(0, AtomSpec::new(Element::C))], vec![]);
+        let options = CanonicalRankParams::kekulize_fragment_default();
+        for size in [0, 2] {
+            let symbols = vec!["C".to_owned(); size];
+            assert_eq!(
+                rank_fragment_atoms_with_params(
+                    &graph,
+                    &[true],
+                    &[],
+                    Some(&symbols),
+                    None,
+                    &options,
+                ),
+                Err(CanonicalRankError::AtomSymbolLength {
+                    expected: 1,
+                    actual: size,
+                })
+            );
+        }
+        let cco = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C)),
+                atom(1, AtomSpec::new(Element::C)),
+            ],
+            vec![bond(0, 0, 1)],
+        );
+        for size in [0, 2] {
+            let symbols = vec!["-".to_owned(); size];
+            assert_eq!(
+                rank_fragment_atoms_with_params(
+                    &cco,
+                    &[true; 2],
+                    &[true],
+                    None,
+                    Some(&symbols),
+                    &options,
+                ),
+                Err(CanonicalRankError::BondSymbolLength {
+                    expected: 1,
+                    actual: size,
+                })
+            );
+        }
+        let empty = TopologyBlock::default();
+        let one = ["X".to_owned()];
+        assert_eq!(
+            rank_fragment_atoms_with_params(&empty, &[true], &[], Some(&one), None, &options),
+            Err(CanonicalRankError::AtomMaskLength {
+                expected: 0,
+                actual: 1,
+            })
+        );
+        assert_eq!(
+            rank_fragment_atoms_with_params(&empty, &[], &[], Some(&one), None, &options),
+            Err(CanonicalRankError::AtomSymbolLength {
+                expected: 0,
+                actual: 1,
+            })
+        );
+        assert_eq!(
+            rank_fragment_atoms_with_params(&empty, &[], &[], None, Some(&one), &options),
+            Err(CanonicalRankError::BondSymbolLength {
+                expected: 0,
+                actual: 1,
+            })
+        );
+        assert_eq!(
+            rank_fragment_atoms_with_params(&empty, &[], &[], None, None, &options),
+            Ok(vec![])
+        );
+    }
+
+    #[test]
+    fn fragment_rank_flags_isolate_ties_isotopes_maps_and_chiral_presence() {
+        let ethane = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C)),
+                atom(1, AtomSpec::new(Element::C)),
+            ],
+            vec![bond(0, 0, 1)],
+        );
+        let mut flags = CanonicalRankParams::default();
+        flags.break_ties = false;
+        let rank = |graph: &TopologyBlock, options: &CanonicalRankParams| {
+            rank_fragment_atoms_with_params(
+                graph,
+                &vec![true; graph.atoms.len()],
+                &vec![true; graph.bonds.len()],
+                None,
+                None,
+                options,
+            )
+            .unwrap()
+        };
+        assert_eq!(rank(&ethane, &flags), vec![0, 0]);
+        flags.break_ties = true;
+        assert_eq!(rank(&ethane, &flags), vec![0, 1]);
+        flags.break_ties = false;
+
+        // Pinned CanonicalRankAtomsInFragment([13CH4].[12CH4]):
+        // includeIsotopes=true -> [1,0], false -> [0,0].
+        let isotopes = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C).with_isotope(13)),
+                atom(1, AtomSpec::new(Element::C).with_isotope(12)),
+            ],
+            vec![],
+        );
+        assert_eq!(rank(&isotopes, &flags), vec![1, 0]);
+        flags.include_isotopes = false;
+        assert_eq!(rank(&isotopes, &flags), vec![0, 0]);
+        flags.include_isotopes = true;
+
+        let maps = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C).with_atom_map(9)),
+                atom(1, AtomSpec::new(Element::C).with_atom_map(3)),
+            ],
+            vec![],
+        );
+        assert_eq!(rank(&maps, &flags), vec![1, 0]);
+        flags.include_atom_maps = false;
+        assert_eq!(rank(&maps, &flags), vec![0, 0]);
+        flags.include_atom_maps = true;
+
+        let chiral_presence = topology(
+            vec![
+                atom(
+                    0,
+                    AtomSpec::new(Element::C).with_chiral_tag(ChiralTag::TetrahedralCw),
+                ),
+                atom(1, AtomSpec::new(Element::C)),
+            ],
+            vec![],
+        );
+        flags.include_chirality = false;
+        flags.include_chiral_presence = false;
+        assert_eq!(rank(&chiral_presence, &flags), vec![0, 0]);
+        flags.include_chiral_presence = true;
+        assert_eq!(rank(&chiral_presence, &flags), vec![1, 0]);
+    }
+
+    #[test]
+    fn fragment_rank_flags_keep_fragment_chirality_ring_rule_and_masks() {
+        let mut fragment = CanonicalRankParams::default();
+        fragment.include_chirality = true;
+        fragment.include_ring_stereo = false;
+        fragment.chirality_rings_use_ring_stereo = false;
+        let fragment_flags = CanonRankFlags::from_fragment_options(fragment);
+        assert!(fragment_flags.use_chirality_rings);
+        let whole_flags = CanonRankFlags::from_fragment_options(CanonicalRankParams {
+            chirality_rings_use_ring_stereo: true,
+            ..fragment
+        });
+        assert!(!whole_flags.use_chirality_rings);
+        fragment.include_chirality = false;
+        assert!(!CanonRankFlags::from_fragment_options(fragment).use_chirality_rings);
+
+        let graph = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C)),
+                atom(1, AtomSpec::new(Element::C)),
+                atom(2, AtomSpec::new(Element::C).with_isotope(13)),
+            ],
+            vec![bond(0, 0, 1), bond(1, 1, 2)],
+        );
+        let mut options = CanonicalRankParams::default();
+        options.break_ties = false;
+        let first = rank_fragment_atoms_with_params(
+            &graph,
+            &[true, true, false],
+            &[true, true],
+            None,
+            None,
+            &options,
+        )
+        .unwrap();
+        assert_eq!(first.len(), 3);
+        let mut changed = graph.clone();
+        changed.atoms[2] = atom(2, AtomSpec::new(Element::C).with_isotope(14));
+        let second = rank_fragment_atoms_with_params(
+            &changed,
+            &[true, true, false],
+            &[true, false],
+            None,
+            None,
+            &options,
+        )
+        .unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn fragment_rank_prepared_borrows_fast_rings_and_valence_without_mutation() {
+        let graph = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C)),
+                atom(1, AtomSpec::new(Element::C)),
+                atom(2, AtomSpec::new(Element::O)),
+            ],
+            vec![bond(0, 0, 1), bond(1, 1, 2)],
+        );
+        let valence =
+            crate::assign_valence_with_options_for_topology(&graph, ValenceModel::RdkitLike, false)
+                .unwrap();
+        let rings =
+            fast_find_rings_from_parts(graph.atoms.len(), &graph.bonds, &graph.adjacency).unwrap();
+        let original_graph = graph.clone();
+        let original_valence = valence.clone();
+        let original_rings = rings.clone();
+        let view = CanonRankReadView::from_prepared_state(&graph, &valence, Some(&rings)).unwrap();
+        assert!(matches!(view.valence, Cow::Borrowed(_)));
+        assert!(matches!(view.rings, Cow::Borrowed(_)));
+        let options = CanonicalRankParams::kekulize_fragment_default();
+        let prepared = rank_fragment_atoms_with_prepared_state(
+            &graph,
+            &valence,
+            Some(&rings),
+            &[true; 3],
+            &[true; 2],
+            None,
+            None,
+            &options,
+        )
+        .unwrap();
+        assert_eq!(
+            prepared,
+            rank_fragment_atoms_with_params(&graph, &[true; 3], &[true; 2], None, None, &options,)
+                .unwrap()
+        );
+        assert_eq!(graph, original_graph);
+        assert_eq!(valence, original_valence);
+        assert_eq!(rings, original_rings);
+    }
+
+    #[test]
+    fn fragment_rank_prepared_recomputes_only_missing_or_unknown_rings() {
+        let graph = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C)),
+                atom(1, AtomSpec::new(Element::C)),
+            ],
+            vec![bond(0, 0, 1)],
+        );
+        let valence =
+            crate::assign_valence_with_options_for_topology(&graph, ValenceModel::RdkitLike, false)
+                .unwrap();
+        let unknown = RingInfo::new(RingFindType::OtherOrUnknown, 2, 1);
+        let original = unknown.clone();
+        for supplied in [None, Some(&unknown)] {
+            let view = CanonRankReadView::from_prepared_state(&graph, &valence, supplied).unwrap();
+            assert!(matches!(view.valence, Cow::Borrowed(_)));
+            assert!(matches!(view.rings, Cow::Owned(_)));
+            assert!(view.rings.is_find_fast_or_better());
+            assert_eq!(
+                rank_fragment_atoms_with_prepared_state(
+                    &graph,
+                    &valence,
+                    supplied,
+                    &[true; 2],
+                    &[true],
+                    None,
+                    None,
+                    &CanonicalRankParams::kekulize_fragment_default(),
+                ),
+                rank_fragment_atoms(&graph, &[true; 2], &[true])
+            );
+        }
+        assert_eq!(unknown, original);
+    }
+
+    #[test]
+    fn fragment_rank_prepared_rejects_invalid_rows_and_accepts_no_implicit() {
+        let graph = topology(
+            vec![
+                atom(0, AtomSpec::new(Element::C).with_no_implicit(true)),
+                atom(1, AtomSpec::new(Element::C)),
+            ],
+            vec![bond(0, 0, 1)],
+        );
+        let mut valence =
+            crate::assign_valence_with_options_for_topology(&graph, ValenceModel::RdkitLike, false)
+                .unwrap();
+        valence.implicit_hydrogens[0] = -1;
+        assert!(CanonRankReadView::from_prepared_state(&graph, &valence, None).is_ok());
+        let mut bad = valence.clone();
+        bad.explicit_valence.pop();
+        assert!(matches!(
+            CanonRankReadView::from_prepared_state(&graph, &bad, None),
+            Err(CanonicalRankError::PreparedValenceLength {
+                atom_count: 2,
+                explicit_len: 1,
+                implicit_len: 2,
+            })
+        ));
+        bad = valence.clone();
+        bad.implicit_hydrogens[1] = -1;
+        assert!(matches!(
+            CanonRankReadView::from_prepared_state(&graph, &bad, None),
+            Err(CanonicalRankError::PreparedValenceInvalid { atom_index: 1 })
+        ));
+        let wrong_rings = RingInfo::new(RingFindType::Fast, 1, 0);
+        assert!(matches!(
+            CanonRankReadView::from_prepared_state(&graph, &valence, Some(&wrong_rings)),
+            Err(CanonicalRankError::PreparedRingLength {
+                expected_atoms: 2,
+                actual_atoms: 1,
+                expected_bonds: 1,
+                actual_bonds: 0,
+            })
+        ));
+    }
+
+    #[test]
     fn canonical_rank_masks_control_fragment_initialization() {
         let graph = topology(
             vec![
@@ -4899,7 +5808,8 @@ mod tests {
         );
         let view = CanonRankReadView::from_topology(&graph).unwrap();
         let atoms =
-            init_fragment_canon_atoms(&view, &[true, true, false], &[true, true], true).unwrap();
+            init_fragment_canon_atoms(&view, &[true, true, false], &[true, true], true, None, None)
+                .unwrap();
         assert_eq!(
             atoms.iter().map(|atom| atom.is_in_play).collect::<Vec<_>>(),
             vec![true, true, false]
@@ -4916,7 +5826,8 @@ mod tests {
         assert!(atoms[2].bonds.is_empty());
 
         let bond_masked =
-            init_fragment_canon_atoms(&view, &[true, true, true], &[true, false], true).unwrap();
+            init_fragment_canon_atoms(&view, &[true, true, true], &[true, false], true, None, None)
+                .unwrap();
         assert_eq!(
             bond_masked
                 .iter()
@@ -4938,7 +5849,8 @@ mod tests {
             vec![bond(0, 0, 1)],
         );
         let view = CanonRankReadView::from_topology(&ethane).unwrap();
-        let mut atoms = init_fragment_canon_atoms(&view, &[true, true], &[true], true).unwrap();
+        let mut atoms =
+            init_fragment_canon_atoms(&view, &[true, true], &[true], true, None, None).unwrap();
         let mut options = CanonicalRankParams::kekulize_fragment_default();
         options.break_ties = false;
         assert_eq!(
@@ -4973,7 +5885,8 @@ mod tests {
             vec![],
         );
         let view = CanonRankReadView::from_topology(&graph).unwrap();
-        let mut inactive = init_fragment_canon_atoms(&view, &[false, false], &[], true).unwrap();
+        let mut inactive =
+            init_fragment_canon_atoms(&view, &[false, false], &[], true, None, None).unwrap();
         let mut no_tie_break = CanonicalRankParams::kekulize_fragment_default();
         no_tie_break.break_ties = false;
         assert_eq!(

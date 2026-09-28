@@ -557,14 +557,17 @@ fn cip_clear_removes_computed_members_only_and_is_atomic() {
     let mut parts = OpParts::<EffectsAccess>::new(&source, operation).unwrap();
     parts.apply_cip_policy_runtime().unwrap();
     let output = parts.finish().unwrap();
-    assert_eq!(output.topology().atoms[0].prop("_CIPCode"), Some("R"));
+    assert_eq!(
+        output.topology().atoms[0].prop("_CIPCode"),
+        Some(&cosmolkit_model::PropertyValue::from("R"))
+    );
     assert_eq!(output.topology().atoms[0].prop("_CIPNeighborOrder"), None);
     assert_eq!(output.topology().bonds[0].prop("_CIPNeighborOrder"), None);
     assert_eq!(output.properties().prop("_CIPComputed"), None);
     assert_eq!(output.properties().prop("ordinary"), Some("kept"));
     assert_eq!(
         source.topology().atoms[0].prop("_CIPNeighborOrder"),
-        Some("1")
+        Some(&cosmolkit_model::PropertyValue::from("1"))
     );
 
     let denied = spec(
@@ -584,6 +587,105 @@ fn cip_clear_removes_computed_members_only_and_is_atomic() {
         OpParts::<EffectsAccess>::validate_effect_contract(denied),
         Err(OperationError::CipStateContract { .. })
     ));
+}
+
+#[test]
+fn cip_assignment_proof_preserves_unowned_typed_property_state_and_order() {
+    let operation = spec(
+        "with_cip_labels_with_options",
+        MoleculeOpOutput::Single,
+        all_effect_access(),
+        all_effect_access().write(),
+        effects(
+            DerivedState::NONE,
+            DerivedState::RINGS,
+            DerivedState::NONE,
+            DerivedState::NONE,
+        ),
+        CipStatePolicy::Assign,
+    );
+    // Exercise both row kinds and each independent unowned property dimension.
+    // Case zero changes only owned keys, including their insertion order.
+    for bond_row in [false, true] {
+        for change in 0..=5 {
+            let mut topology = molecule().topology().clone();
+            macro_rules! seed {
+                ($row:expr) => {{
+                    let row = $row;
+                    row.set_prop("first", "1").unwrap();
+                    row.set_prop("_CIPCode", "old").unwrap();
+                    row.set_computed_prop("_CIPNeighborOrder", "[0]").unwrap();
+                    row.set_prop("last", "2").unwrap();
+                }};
+            }
+            if bond_row {
+                seed!(&mut topology.bonds[0]);
+            } else {
+                seed!(&mut topology.atoms[0]);
+            }
+            let source = Molecule::from_parts(
+                topology,
+                CoordinateBlock::default(),
+                MoleculeProperties::default(),
+            )
+            .unwrap();
+            let mut parts = OpParts::<EffectsAccess>::new(&source, operation).unwrap();
+            let mut candidate = parts.checkout_topology_runtime().unwrap();
+            macro_rules! edit {
+                ($row:expr) => {{
+                    let row = $row;
+                    row.clear_prop("_CIPCode");
+                    row.set_prop("_CIPCode", "R").unwrap();
+                    row.set_computed_prop("_CIPNeighborOrder", "[1,0]").unwrap();
+                    match change {
+                        0 => {}
+                        1 => {
+                            row.set_prop("first", "different").unwrap();
+                        }
+                        2 => {
+                            row.set_prop("first", cosmolkit_model::PropertyValue::Int(1))
+                                .unwrap();
+                        }
+                        3 => {
+                            row.set_computed_prop("first", "1").unwrap();
+                        }
+                        4 => {
+                            row.clear_prop("first");
+                            row.set_prop("first", "1").unwrap();
+                        }
+                        5 => {
+                            row.clear_prop("last");
+                        }
+                        _ => unreachable!(),
+                    }
+                }};
+            }
+            if bond_row {
+                edit!(&mut candidate.bonds[0]);
+            } else {
+                edit!(&mut candidate.atoms[0]);
+            }
+            parts.install_topology_runtime(candidate).unwrap();
+            let result = parts.prove_preserved_runtime(
+                DerivedState::RINGS,
+                PreservationProof::CipLabelAssignment,
+            );
+            if change == 0 {
+                result.unwrap();
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(OperationError::DerivedEffectContract {
+                            issue: "CIP-label assignment changed state outside its declared fields",
+                            ..
+                        })
+                    ),
+                    "bond_row={bond_row}, change={change}: {result:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

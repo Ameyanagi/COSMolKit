@@ -44,4 +44,4 @@ smiles = ["cosmolkit/smiles"]
 valence = ["cosmolkit/valence"]
 
 [dependencies]
-cosmolkit = { version = "0.5.0-rc.6", path = "../crates/cosmolkit", default-features = false }
+cosmolkit = { version = "0.5.0-rc.7", path = "../crates/cosmolkit", default-features = false }

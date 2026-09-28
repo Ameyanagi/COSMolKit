@@ -277,7 +277,7 @@ fn value_semantics_unchanged_blocks_and_failure_atomicity() {
     assert_eq!(output.property("_CIPComputed"), Some("true"));
     assert_eq!(
         output.atom(AtomId::new(0)).unwrap().prop("_CIPCode"),
-        Some("R")
+        Some(&cosmolkit_model::PropertyValue::from("R"))
     );
     assert_eq!(source.coordinates_2d().unwrap()[0], [10.0, 10.0]);
 

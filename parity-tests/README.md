@@ -1,14 +1,16 @@
-# Rust parity registry pilot
+# Rust parity registry
 
 This top-level, unpublished crate tests the **public `cosmolkit` API with
 `full` enabled**. Its only chemistry dependency is `cosmolkit`. No production
-crate depends on this runner. Scope is exactly `fuzzy_and` and `fuzzy_or` on
-the two public sparse-count index widths; this is not a performance suite.
+crate depends on this runner. Executable tasks and parameter combinations are
+defined in `src/registry.rs`; future catalog entries are not executable tasks.
+This is not a performance suite.
 
 ## Read the implementation in this order
 
-1. `src/registry.rs`: two tasks, their u32/u64 widths, typed inputs/results,
-   and six explicitly named branch cases. No YAML and no hidden repetitions.
+1. `src/registry.rs`: executable tasks, widths, and typed inputs/results;
+   `src/registry/fingerprint_corpus.rs`: the deterministic fingerprint matrix;
+   `src/registry/molecule_plan.rs`: molecular task profiles and future catalog.
 2. `src/lib.rs`: `run` automatically prepares data, performs complete preflight,
    then executes and compares exact typed results.
 3. `src/execute.rs`: calls the public Rust API; no chemistry reimplementation.
@@ -51,6 +53,33 @@ directory. Do not stage these generated artifacts.
 
 ## What exactly executes?
 
+No task filter selects every executable task. Molecular tasks consume the
+selected `.smi` corpus (default: `smiles_small.smi`). Fuzzy tasks consume their
+own deterministic matrix, not fingerprints inferred from those SMILES:
+
+| Axis | Values |
+|---|---|
+| Key distribution | Both empty, left empty, right empty, same keys, left before right, right before left, interleaved, partial overlap, left subset, right subset |
+| Vector length | 16, 256, 65536, 2^31, u32::MAX |
+| Count palette | Positive, negative, mixed signs, stored zeros, i32 boundaries |
+| Samples per cell | 20 deterministic index rotations/count assignments |
+
+10 × 5 × 5 × 20 = **5000 input pairs**. Each pair runs through both u32/u64
+widths and both Fuzzy operations: **20000 comparisons**. This is a stratified
+input matrix, not 5000 unique chemical fingerprints or a performance loop;
+empty shapes intentionally recur across lengths and count palettes. The Rust
+generator defines exact masks, palettes and index arithmetic. Its source is
+included in reference identity, so changing it invalidates stale generations.
+
+```bash
+# All molecular tasks use 5000 SMILES; both Fuzzy tasks use 5000 input pairs.
+cargo run -p cosmolkit-parity-tests --release --features cosmolkit/op-contracts-strict -- \
+  run --corpus testdata/smiles/corpus/smiles_5000.smi
+```
+
+The following six small cases are used by runner regression tests, not as the
+default parity corpus:
+
 The builtin input pairs exercise:
 
 | Case | Source branch |
@@ -62,13 +91,9 @@ The builtin input pairs exercise:
 | `disjoint_interleaved` | Ordered scan advances across alternating keys |
 | `explicit_zero_shared_and_exclusive` | Stored zero is an entry, not an absent key |
 
-Each case executes once for each registered width and operation:
-6 input pairs x 2 widths x 2 operations = **24 comparisons**. Selecting one
-operation gives 12. These counts follow the declared cases, not a target
-sample count, repetition constant, or performance claim.
-
-Supply `--corpus FILE` to all stages to use another complete input list.
-The file is a JSON array of the Rust `Pair` type; operation/width expansion
+Supply `--corpus FILE.json` to replace the fingerprint input matrix with a
+JSON array of the Rust `Pair` type. A `.smi` path replaces only the molecular
+corpus; the other selected family keeps its default. Operation/width expansion
 still comes from the Rust registry, not the file:
 
 ```json
@@ -86,7 +111,7 @@ This pilot accepts equal-length valid vectors with unique indices strictly
 below length and i32 counts. Construction creates stored zeros separately
 before assigning nonzero counts; no arbitrary count-magnitude limit is used.
 Other inputs fail preflight rather than being skipped. Exhaustive integer-domain coverage, error parity,
-SMILES-to-fingerprint conversion and million-row streaming are not claimed.
+SMILES-to-fingerprint conversion and million-row streaming are not claimed for Fuzzy.
 The small pilot loads owned snapshots in memory to keep the execution flow
 inspectable; it is not yet the large-corpus engine.
 
@@ -141,6 +166,34 @@ in `crates/cosmolkit-fingerprints/tests/`. Neither contains this pilot's corpus
 loader, preparation, oracle invocation or comparison pipeline. The old
 1400-call timing sampler was removed; its functional shapes remain covered
 by deterministic owner regressions. No speed equivalence is inferred.
+
+## Coverage CI and reference caching
+
+`.github/workflows/coverage.yml` runs default regression suites from every
+current publishable Rust library and this runner, with runtime strict checks.
+Python/WASM wrappers, the historical macro package and development tools are
+not selected. Explicitly ignored tests remain opt-in; documentation tests run
+separately without coverage instrumentation.
+
+In the same job, `cargo llvm-cov run --no-report` accumulates coverage for every registered
+parity task with 5000 molecular records and the 5000-pair fingerprint matrix.
+Both regression and parity execution contribute to one HTML/LCOV report.
+The independent parity JSON records inputs, expected/actual results and mismatches.
+Failures do not suppress reports and still fail CI.
+
+The reference cache binds OS/architecture, Python version, pinned environment,
+runner/registry/generator sources and the molecular corpus. Restore uses only
+that identity prefix; each newly generated, globally validated snapshot gets a
+unique run/attempt suffix so corrupt caches can be replaced. Cache hits still
+undergo the Rust manifest/input/reference checks. Only reference files are
+cached, never Rust results or coverage profiles. Fully reusable generations are
+not saved again. A chemistry mismatch does not invalidate reference data.
+
+`Swatinem/rust-cache@v2` separately caches dependency and workspace compilation
+in the normal and instrumented build directories, including after failed tests.
+Reference generations live outside those build caches. Coverage measurements
+are reset without deleting compiled artifacts, and fresh measurements from
+both test stages are merged for each run.
 
 ## Public API audit
 

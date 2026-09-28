@@ -193,11 +193,11 @@ fn value_operation_installs_family_state_and_preserves_all_input_blocks() {
     assert_eq!(output.property("_CIPComputed"), Some("true"));
     assert_eq!(
         output.atom(AtomId::new(0)).unwrap().prop("_CIPCode"),
-        Some("R")
+        Some(&cosmolkit_model::PropertyValue::from("R"))
     );
     assert_eq!(
         output.bond(BondId::new(0)).unwrap().prop("_CIPBondCode"),
-        Some("E")
+        Some(&cosmolkit_model::PropertyValue::from("E"))
     );
     assert!(format!("{source:?}").contains("derived_cache_is_empty: true"));
     assert!(format!("{output:?}").contains("derived_cache_is_empty: false"));

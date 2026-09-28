@@ -291,8 +291,14 @@ fn value_sanitize_preserves_identity_coordinates_and_ordinary_properties() {
     assert_eq!(source.coordinates_2d(), output.coordinates_2d());
     assert_eq!(source.conformers_3d(), output.conformers_3d());
     assert_eq!(output.property("source"), Some("preserved"));
-    assert_eq!(output.atoms()[0].prop("atom-note"), Some("atom-0"));
-    assert_eq!(output.bonds()[0].prop("bond-note"), Some("bond-0"));
+    assert_eq!(
+        output.atoms()[0].prop("atom-note"),
+        Some(&cosmolkit_model::PropertyValue::from("atom-0"))
+    );
+    assert_eq!(
+        output.bonds()[0].prop("bond-note"),
+        Some(&cosmolkit_model::PropertyValue::from("bond-0"))
+    );
     assert_eq!(output.property("_CIPComputed"), None);
     assert_eq!(output.atoms()[0].prop("_CIPCode"), None);
     assert_eq!(output.bonds()[0].prop("_CIPCode"), None);
@@ -314,8 +320,14 @@ fn none_selection_still_clears_only_computed_topology_and_cip_properties() {
         .unwrap();
     assert_eq!(output.property("source"), Some("preserved"));
     assert_eq!(output.property("_CIPComputed"), None);
-    assert_eq!(output.atoms()[0].prop("atom-note"), Some("atom-0"));
-    assert_eq!(output.bonds()[0].prop("bond-note"), Some("bond-0"));
+    assert_eq!(
+        output.atoms()[0].prop("atom-note"),
+        Some(&cosmolkit_model::PropertyValue::from("atom-0"))
+    );
+    assert_eq!(
+        output.bonds()[0].prop("bond-note"),
+        Some(&cosmolkit_model::PropertyValue::from("bond-0"))
+    );
     assert_eq!(output.atoms()[0].prop("_CIPCode"), None);
     assert_eq!(output.bonds()[0].prop("_CIPCode"), None);
     assert_eq!(

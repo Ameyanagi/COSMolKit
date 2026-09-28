@@ -4,6 +4,212 @@ use std::fmt;
 
 use crate::{Molecule, OperationError};
 
+/// Original-index fragment selection; symbol arrays are indexed by the full molecule.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FragmentSmilesWriteParams {
+    pub smiles: crate::SmilesWriteParams,
+    pub atoms: Vec<crate::AtomId>,
+    /// None selects all bonds between selected atoms; Some(empty) selects no bonds.
+    pub bonds: Option<Vec<crate::BondId>>,
+    pub atom_symbols: Option<Vec<String>>,
+    pub bond_symbols: Option<Vec<String>>,
+}
+
+/// Fragment selection with explicit CX fields and dimension-scoped coordinates.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FragmentCxSmilesWriteParams {
+    pub cx: crate::CxSmilesWriteParams,
+    pub atoms: Vec<crate::AtomId>,
+    pub bonds: Option<Vec<crate::BondId>>,
+    pub atom_symbols: Option<Vec<String>>,
+    pub bond_symbols: Option<Vec<String>>,
+}
+
+/// Source-preserving serialization failures, without converting causes to strings.
+#[derive(Debug)]
+pub enum SmilesWriteError {
+    Write(cosmolkit_smiles::SmilesParseError),
+    Fragment(cosmolkit_smiles::FragmentWriteInputError),
+}
+
+impl fmt::Display for SmilesWriteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Write(error) => write!(formatter, "SMILES serialization failed: {error}"),
+            Self::Fragment(error) => {
+                write!(formatter, "fragment SMILES serialization failed: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SmilesWriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Write(error) => Some(error),
+            Self::Fragment(error) => Some(error),
+        }
+    }
+}
+
+impl From<cosmolkit_smiles::SmilesParseError> for SmilesWriteError {
+    fn from(error: cosmolkit_smiles::SmilesParseError) -> Self {
+        Self::Write(error)
+    }
+}
+
+impl From<cosmolkit_smiles::FragmentWriteInputError> for SmilesWriteError {
+    fn from(error: cosmolkit_smiles::FragmentWriteInputError) -> Self {
+        Self::Fragment(error)
+    }
+}
+
+impl Molecule {
+    fn smiles_ring_state(&self) -> Option<&cosmolkit_core::RingInfo> {
+        #[cfg(feature = "rings")]
+        {
+            self.derived_cache_runtime().ring_info()
+        }
+        #[cfg(not(feature = "rings"))]
+        {
+            None
+        }
+    }
+
+    fn smiles_valence_state(&self) -> Option<&cosmolkit_core::ValenceAssignment> {
+        #[cfg(any(feature = "valence", feature = "hydrogens"))]
+        {
+            self.derived_cache_runtime().valence_assignment()
+        }
+        #[cfg(not(any(feature = "valence", feature = "hydrogens")))]
+        {
+            None
+        }
+    }
+
+    fn smiles_view(&self) -> cosmolkit_smiles::SmilesRecordView<'_> {
+        cosmolkit_smiles::SmilesRecordView {
+            topology: self.topology(),
+            coordinates: self.coordinate_block_runtime(),
+            properties: self.properties(),
+        }
+    }
+
+    /// Serialize without changing molecule state or installing writer caches.
+    pub fn to_smiles(&self) -> Result<String, SmilesWriteError> {
+        self.to_smiles_with_params(&crate::SmilesWriteParams::default())
+    }
+
+    pub fn to_smiles_with_params(
+        &self,
+        params: &crate::SmilesWriteParams,
+    ) -> Result<String, SmilesWriteError> {
+        Ok(cosmolkit_smiles::write_smiles_with_params(
+            self.smiles_view(),
+            params,
+        )?)
+    }
+
+    pub fn to_cx_smiles(&self) -> Result<String, SmilesWriteError> {
+        self.to_cx_smiles_with_params(&crate::CxSmilesWriteParams::default())
+    }
+
+    /// Auto coordinates require a unique stored set; explicit dimension/ID resolves ambiguity.
+    pub fn to_cx_smiles_with_params(
+        &self,
+        params: &crate::CxSmilesWriteParams,
+    ) -> Result<String, SmilesWriteError> {
+        Ok(cosmolkit_smiles::write_cx_smiles_with_params(
+            self.smiles_view(),
+            params,
+        )?)
+    }
+
+    pub fn to_fragment_smiles(&self, atoms: &[crate::AtomId]) -> Result<String, SmilesWriteError> {
+        Ok(cosmolkit_smiles::write_fragment_smiles_output(
+            self.smiles_view(),
+            &crate::SmilesWriteParams::default(),
+            atoms,
+            None,
+            None,
+            None,
+            self.smiles_ring_state(),
+            self.smiles_valence_state(),
+        )?
+        .text)
+    }
+
+    pub fn to_fragment_smiles_with_params(
+        &self,
+        params: &FragmentSmilesWriteParams,
+    ) -> Result<String, SmilesWriteError> {
+        Ok(cosmolkit_smiles::write_fragment_smiles_output(
+            self.smiles_view(),
+            &params.smiles,
+            &params.atoms,
+            params.bonds.as_deref(),
+            params.atom_symbols.as_deref(),
+            params.bond_symbols.as_deref(),
+            self.smiles_ring_state(),
+            self.smiles_valence_state(),
+        )?
+        .text)
+    }
+
+    pub fn to_fragment_cx_smiles(
+        &self,
+        atoms: &[crate::AtomId],
+    ) -> Result<String, SmilesWriteError> {
+        Ok(cosmolkit_smiles::write_fragment_cx_smiles(
+            self.smiles_view(),
+            &crate::CxSmilesWriteParams::default(),
+            atoms,
+            None,
+            None,
+            None,
+            self.smiles_ring_state(),
+            self.smiles_valence_state(),
+        )?)
+    }
+
+    pub fn to_fragment_cx_smiles_with_params(
+        &self,
+        params: &FragmentCxSmilesWriteParams,
+    ) -> Result<String, SmilesWriteError> {
+        Ok(cosmolkit_smiles::write_fragment_cx_smiles(
+            self.smiles_view(),
+            &params.cx,
+            &params.atoms,
+            params.bonds.as_deref(),
+            params.atom_symbols.as_deref(),
+            params.bond_symbols.as_deref(),
+            self.smiles_ring_state(),
+            self.smiles_valence_state(),
+        )?)
+    }
+
+    /// Preserve source ordering and duplicates. Seeds 1..=i32::MAX reseed;
+    /// zero and high-bit u32 seeds continue the shared stream, matching the
+    /// source's u32-to-i32 cast and positive-only reseeding condition.
+    pub fn to_random_smiles(&self, count: u32, seed: u32) -> Result<Vec<String>, SmilesWriteError> {
+        self.to_random_smiles_with_params(count, seed, &crate::RandomSmilesWriteParams::default())
+    }
+
+    pub fn to_random_smiles_with_params(
+        &self,
+        count: u32,
+        seed: u32,
+        params: &crate::RandomSmilesWriteParams,
+    ) -> Result<Vec<String>, SmilesWriteError> {
+        Ok(cosmolkit_smiles::write_random_smiles_vector(
+            self.smiles_view(),
+            count,
+            seed,
+            params,
+        )?)
+    }
+}
+
 /// Structured failure from the public SMILES construction pipeline.
 #[derive(Debug)]
 pub enum SmilesError {

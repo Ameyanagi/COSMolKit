@@ -12,8 +12,8 @@ use cosmolkit_core::{
     sanitize_topology,
 };
 use cosmolkit_model::{
-    AdjacencyList, Atom, AtomId, AtomSpec, Bond, BondId, BondSpec, StereoGroup, StereoGroupKind,
-    TopologyBlock,
+    AdjacencyList, Atom, AtomId, AtomSpec, Bond, BondId, BondSpec, PropertyValue, StereoGroup,
+    StereoGroupKind, TopologyBlock,
 };
 use cosmolkit_types::{BondOrder, BondStereo, ChiralTag, Element, Hybridization};
 
@@ -336,7 +336,10 @@ fn chirality_cleanup_applies_tetrahedral_hybridization_and_permutation_rules() {
     let output = cleanup_chirality(&too_large, &valence).unwrap();
     assert_eq!(output.atoms[0].chiral_tag(), ChiralTag::Tetrahedral);
     assert_eq!(output.atoms[0].chiral_permutation(), Some(0));
-    assert_eq!(output.atoms[0].prop("_chiralPermutation"), Some("0"));
+    assert_eq!(
+        output.atoms[0].prop("_chiralPermutation"),
+        Some(&PropertyValue::String("0".to_owned()))
+    );
 }
 
 #[test]
@@ -361,7 +364,7 @@ fn chirality_cleanup_enforces_non_tetrahedral_degree_and_exact_permutation_limit
         );
         assert_eq!(
             output.atoms[0].prop("_chiralPermutation"),
-            Some(maximum_permutation.to_string().as_str())
+            Some(&PropertyValue::String(maximum_permutation.to_string()))
         );
 
         let (too_small, valence) = star(
@@ -402,7 +405,10 @@ fn chirality_cleanup_enforces_non_tetrahedral_degree_and_exact_permutation_limit
         let output = cleanup_chirality(&too_large_permutation, &valence).unwrap();
         assert_eq!(output.atoms[0].chiral_tag(), tag);
         assert_eq!(output.atoms[0].chiral_permutation(), Some(0));
-        assert_eq!(output.atoms[0].prop("_chiralPermutation"), Some("0"));
+        assert_eq!(
+            output.atoms[0].prop("_chiralPermutation"),
+            Some(&PropertyValue::String("0".to_owned()))
+        );
     }
 }
 
@@ -845,9 +851,15 @@ fn sanitize_pipeline_clears_only_computed_properties_and_reports_property_before
     .unwrap()
     .topology;
     assert_eq!(input, snapshot);
-    assert_eq!(output.atoms[0].prop("user_atom"), Some("keep"));
+    assert_eq!(
+        output.atoms[0].prop("user_atom"),
+        Some(&PropertyValue::String("keep".to_owned()))
+    );
     assert_eq!(output.atoms[0].prop("computed_atom"), None);
-    assert_eq!(output.bonds[0].prop("user_bond"), Some("keep"));
+    assert_eq!(
+        output.bonds[0].prop("user_bond"),
+        Some(&PropertyValue::String("keep".to_owned()))
+    );
     assert_eq!(output.bonds[0].prop("computed_bond"), None);
 
     let mut overvalent_specs = vec![AtomSpec::new(Element::C)];

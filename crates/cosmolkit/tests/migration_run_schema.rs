@@ -170,6 +170,16 @@ fn canonical_registry_preserves_order_and_feature_local_subsets() {
         "SubstanceGroup.head_crossing_bonds",
         "SubstanceGroup.crossing_bond_correspondence",
         "types.OperationError",
+        "types.PropertyValue",
+        "types.PropertyValueKind",
+        "types.PropertyValueError",
+        "PropertyValueError.expected",
+        "PropertyValueError.actual",
+        "PropertyValue.kind",
+        "PropertyValue.as_string",
+        "PropertyValue.as_int",
+        "PropertyValue.as_double",
+        "PropertyValue.as_bool",
         "types.TemplateAttachment",
         "types.TemplateAttachmentOrder",
         "types.TemplateAttachmentOrderError",
@@ -537,6 +547,31 @@ fn canonical_registry_preserves_order_and_feature_local_subsets() {
                 "BioPdbReadError.line_number",
                 "BioPdbReadError.record_tag",
                 "BioMmcifReadError.stage",
+            ],
+        );
+    }
+    if cfg!(feature = "smiles") {
+        expected.splice(
+            0..0,
+            [
+                "types.SmilesWriteParams",
+                "types.CxSmilesWriteParams",
+                "types.CxSmilesFields",
+                "types.CxCoordinateSelection",
+                "types.RandomSmilesWriteParams",
+                "types.FragmentSmilesWriteParams",
+                "types.FragmentCxSmilesWriteParams",
+                "types.SmilesWriteError",
+                "Molecule.to_smiles",
+                "Molecule.to_smiles_with_params",
+                "Molecule.to_cx_smiles",
+                "Molecule.to_cx_smiles_with_params",
+                "Molecule.to_fragment_smiles",
+                "Molecule.to_fragment_smiles_with_params",
+                "Molecule.to_fragment_cx_smiles",
+                "Molecule.to_fragment_cx_smiles_with_params",
+                "Molecule.to_random_smiles",
+                "Molecule.to_random_smiles_with_params",
             ],
         );
     }

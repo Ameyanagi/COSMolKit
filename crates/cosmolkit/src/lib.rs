@@ -84,7 +84,10 @@ pub use cosmolkit_io::{
 pub use cosmolkit_model as model;
 pub use cosmolkit_model::*;
 #[cfg(feature = "smiles")]
-pub use cosmolkit_smiles::{SmilesParseParams, SmilesStereoError};
+pub use cosmolkit_smiles::{
+    CxCoordinateSelection, CxSmilesFields, CxSmilesWriteParams, RandomSmilesWriteParams,
+    SmilesParseParams, SmilesStereoError, SmilesWriteParams,
+};
 #[cfg(feature = "stereo")]
 pub use cosmolkit_stereo::{CipLabelOptions, CipLabelerError};
 #[cfg(feature = "matrices")]
@@ -133,7 +136,9 @@ pub(crate) use ops::{WithHydrogensAccess, WithoutHydrogensAccess};
 #[cfg(feature = "io")]
 pub use sdf::{SdfCoordinateMode, SdfError, SdfGraph, SdfReadParams, SdfRecord};
 #[cfg(feature = "smiles")]
-pub use smiles::SmilesError;
+pub use smiles::{
+    FragmentCxSmilesWriteParams, FragmentSmilesWriteParams, SmilesError, SmilesWriteError,
+};
 
 /// Returns the crate version at compile time.
 #[must_use]

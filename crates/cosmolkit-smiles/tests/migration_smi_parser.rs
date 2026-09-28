@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use cosmolkit_model::AtomId;
+use cosmolkit_model::{AtomId, PropertyValue};
 use cosmolkit_smiles::{SmilesParseError, SmilesParseParams, parse_smiles};
 use cosmolkit_types::ChiralTag;
 
@@ -183,7 +183,10 @@ fn branches_rings_and_stereo_finish_in_source_order() {
 fn cx_and_name_policies_are_atomic_and_explicit() {
     let record =
         parse_smiles("CC |$left;right$| sample name", &Default::default()).expect("CX and name");
-    assert_eq!(record.topology.atoms[0].prop("atomLabel"), Some("left"));
+    assert_eq!(
+        record.topology.atoms[0].prop("atomLabel"),
+        Some(&PropertyValue::String("left".to_owned()))
+    );
     assert_eq!(record.properties.name(), Some("sample name"));
 
     let no_cx = parse_smiles(
@@ -225,7 +228,7 @@ fn cleanup_debug_and_post_parse_chemistry_flags_keep_their_layer_boundaries() {
     .expect("uncleaned");
     assert_eq!(
         retained.topology.bonds[0].prop("_cxsmilesBondIdx"),
-        Some("0")
+        Some(&PropertyValue::String("0".to_owned()))
     );
 
     let baseline = parse_smiles(

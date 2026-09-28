@@ -11,8 +11,8 @@ use crate::{
     sanitize_topology_with_query_state,
 };
 use cosmolkit_model::{
-    AdjacencyList, Atom, AtomId, AtomMapping, AtomPdbResidueInfo, AtomSpec, Bond, BondDirection,
-    BondId, BondMapping, BondOrder, BondSpec, BondStereo, ChiralTag, Conformer2D, Conformer3D,
+    AdjacencyList, AtomId, AtomMapping, AtomPdbResidueInfo, AtomSpec, Bond, BondDirection, BondId,
+    BondMapping, BondOrder, BondSpec, BondStereo, ChiralTag, Conformer2D, Conformer3D,
     CoordinateBlock, CoordinateValidationError, Element, Hybridization, MappingValidationError,
     MoleculeProperties, QueryAtom, QueryBond, QueryStateError, QueryStateRef, SGroupBondRole,
     SdfPropertyListTarget, SubstanceGroup, TopologyBlock, TopologyEditError, TopologyMapping,
@@ -3148,7 +3148,7 @@ fn update_removed_hydrogen_neighbor(
         probe.retain(|bond| *bond != removed_bond);
         probe.push(removed_bond);
         if perturbation_order(topology, neighbor, &probe, active_bonds) % 2 == 1 {
-            invert_chirality(&mut topology.atoms[neighbor.index()]);
+            crate::stereo_order::invert_atom_chirality(&mut topology.atoms[neighbor.index()]);
         }
     }
 
@@ -3362,141 +3362,6 @@ fn count_swaps_to_interconvert(reference: &[BondId], mut probe: Vec<BondId>) -> 
         swaps += 1;
     }
     swaps
-}
-
-fn invert_chirality(atom: &mut Atom) -> bool {
-    // BEGIN RDKIT CPP FUNCTION Atom::invertChirality tables and body
-    // RDKit✔️✔️: static const unsigned char octahedral_invert[31] = {
-    // RDKit✔️✔️:     0,   //  0 -> 0
-    // RDKit✔️✔️:     2,   //  1 -> 2
-    // RDKit✔️✔️:     1,   //  2 -> 1
-    // RDKit✔️✔️:     16,  //  3 -> 16
-    // RDKit✔️✔️:     14,  //  4 -> 14
-    // RDKit✔️✔️:     15,  //  5 -> 15
-    // RDKit✔️✔️:     18,  //  6 -> 18
-    // RDKit✔️✔️:     17,  //  7 -> 17
-    // RDKit✔️✔️:     10,  //  8 -> 10
-    // RDKit✔️✔️:     11,  //  9 -> 11
-    // RDKit✔️✔️:     8,   // 10 -> 8
-    // RDKit✔️✔️:     9,   // 11 -> 9
-    // RDKit✔️✔️:     13,  // 12 -> 13
-    // RDKit✔️✔️:     12,  // 13 -> 12
-    // RDKit✔️✔️:     4,   // 14 -> 4
-    // RDKit✔️✔️:     5,   // 15 -> 5
-    // RDKit✔️✔️:     3,   // 16 -> 3
-    // RDKit✔️✔️:     7,   // 17 -> 7
-    // RDKit✔️✔️:     6,   // 18 -> 6
-    // RDKit✔️✔️:     24,  // 19 -> 24
-    // RDKit✔️✔️:     23,  // 20 -> 23
-    // RDKit✔️✔️:     22,  // 21 -> 22
-    // RDKit✔️✔️:     21,  // 22 -> 21
-    // RDKit✔️✔️:     20,  // 23 -> 20
-    // RDKit✔️✔️:     19,  // 24 -> 19
-    // RDKit✔️✔️:     30,  // 25 -> 30
-    // RDKit✔️✔️:     29,  // 26 -> 29
-    // RDKit✔️✔️:     28,  // 27 -> 28
-    // RDKit✔️✔️:     27,  // 28 -> 27
-    // RDKit✔️✔️:     26,  // 29 -> 26
-    // RDKit✔️✔️:     25   // 30 -> 25
-    // RDKit✔️✔️: };
-    // RDKit✔️✔️:
-    // RDKit✔️✔️: static const unsigned char trigonalbipyramidal_invert[21] = {
-    // RDKit✔️✔️:     0,   //  0 -> 0
-    // RDKit✔️✔️:     2,   //  1 -> 2
-    // RDKit✔️✔️:     1,   //  2 -> 1
-    // RDKit✔️✔️:     4,   //  3 -> 4
-    // RDKit✔️✔️:     3,   //  4 -> 3
-    // RDKit✔️✔️:     6,   //  5 -> 6
-    // RDKit✔️✔️:     5,   //  6 -> 5
-    // RDKit✔️✔️:     8,   //  7 -> 8
-    // RDKit✔️✔️:     7,   //  8 -> 7
-    // RDKit✔️✔️:     11,  //  9 -> 11
-    // RDKit✔️✔️:     12,  // 10 -> 12
-    // RDKit✔️✔️:     9,   // 11 -> 9
-    // RDKit✔️✔️:     10,  // 12 -> 10
-    // RDKit✔️✔️:     14,  // 13 -> 14
-    // RDKit✔️✔️:     13,  // 14 -> 13
-    // RDKit✔️✔️:     20,  // 15 -> 20
-    // RDKit✔️✔️:     19,  // 16 -> 19
-    // RDKit✔️✔️:     18,  // 17 -> 28
-    // RDKit✔️✔️:     17,  // 18 -> 17
-    // RDKit✔️✔️:     16,  // 19 -> 16
-    // RDKit✔️✔️:     15   // 20 -> 15
-    // RDKit✔️✔️: };
-    // RDKit✔️✔️: bool Atom::invertChirality() {
-    // RDKit✔️✔️:   unsigned int perm;
-    // RDKit✔️✔️:   switch (getChiralTag()) {
-    // RDKit✔️✔️:     case CHI_TETRAHEDRAL_CW:
-    // RDKit✔️✔️:       setChiralTag(CHI_TETRAHEDRAL_CCW);
-    // RDKit✔️✔️:       return true;
-    // RDKit✔️✔️:     case CHI_TETRAHEDRAL_CCW:
-    // RDKit✔️✔️:       setChiralTag(CHI_TETRAHEDRAL_CW);
-    // RDKit✔️✔️:       return true;
-    // RDKit✔️✔️:     case CHI_TETRAHEDRAL:
-    // RDKit✔️✔️:       if (getPropIfPresent(common_properties::_chiralPermutation, perm)) {
-    // RDKit✔️✔️:         if (perm == 1) {
-    // RDKit✔️✔️:           perm = 2;
-    // RDKit✔️✔️:         } else if (perm == 2) {
-    // RDKit✔️✔️:           perm = 1;
-    // RDKit✔️✔️:         } else {
-    // RDKit✔️✔️:           perm = 0;
-    // RDKit✔️✔️:         }
-    // RDKit✔️✔️:         setProp(common_properties::_chiralPermutation, perm);
-    // RDKit✔️✔️:         return perm != 0;
-    // RDKit✔️✔️:       }
-    // RDKit✔️✔️:       break;
-    // RDKit✔️✔️:     case CHI_TRIGONALBIPYRAMIDAL:
-    // RDKit✔️✔️:       if (getPropIfPresent(common_properties::_chiralPermutation, perm)) {
-    // RDKit✔️✔️:         perm = (perm <= 20) ? trigonalbipyramidal_invert[perm] : 0;
-    // RDKit✔️✔️:         setProp(common_properties::_chiralPermutation, perm);
-    // RDKit✔️✔️:         return perm != 0;
-    // RDKit✔️✔️:       }
-    // RDKit✔️✔️:       break;
-    // RDKit✔️✔️:     case CHI_OCTAHEDRAL:
-    // RDKit✔️✔️:       if (getPropIfPresent(common_properties::_chiralPermutation, perm)) {
-    // RDKit✔️✔️:         perm = (perm <= 30) ? octahedral_invert[perm] : 0;
-    // RDKit✔️✔️:         setProp(common_properties::_chiralPermutation, perm);
-    // RDKit✔️✔️:         return perm != 0;
-    // RDKit✔️✔️:       }
-    // RDKit✔️✔️:       break;
-    // RDKit✔️✔️:     default:
-    // RDKit✔️✔️:       break;
-    // RDKit✔️✔️:   }
-    // RDKit✔️✔️:   return false;
-    // RDKit✔️✔️: }
-    // END RDKIT CPP FUNCTION Atom::invertChirality tables and body
-    const OCTAHEDRAL_INVERT: [u32; 31] = [
-        0, 2, 1, 16, 14, 15, 18, 17, 10, 11, 8, 9, 13, 12, 4, 5, 3, 7, 6, 24, 23, 22, 21, 20, 19,
-        30, 29, 28, 27, 26, 25,
-    ];
-    const TRIGONAL_BIPYRAMIDAL_INVERT: [u32; 21] = [
-        0, 2, 1, 4, 3, 6, 5, 8, 7, 11, 12, 9, 10, 14, 13, 20, 19, 18, 17, 16, 15,
-    ];
-    match atom.chiral_tag() {
-        ChiralTag::TetrahedralCw => {
-            atom.set_chiral_tag(ChiralTag::TetrahedralCcw);
-            true
-        }
-        ChiralTag::TetrahedralCcw => {
-            atom.set_chiral_tag(ChiralTag::TetrahedralCw);
-            true
-        }
-        ChiralTag::Tetrahedral => invert_chiral_permutation(atom, &[0, 2, 1]),
-        ChiralTag::TrigonalBipyramidal => {
-            invert_chiral_permutation(atom, &TRIGONAL_BIPYRAMIDAL_INVERT)
-        }
-        ChiralTag::Octahedral => invert_chiral_permutation(atom, &OCTAHEDRAL_INVERT),
-        _ => false,
-    }
-}
-
-fn invert_chiral_permutation(atom: &mut Atom, table: &[u32]) -> bool {
-    let Some(permutation) = atom.chiral_permutation() else {
-        return false;
-    };
-    let inverted = table.get(permutation as usize).copied().unwrap_or(0);
-    atom.set_chiral_permutation(Some(inverted));
-    inverted != 0
 }
 
 fn adjust_stereo_atoms_if_required(

@@ -325,12 +325,12 @@ fn clean_result_commits_only_source_defined_stereo_cleanup_and_cip_effects() {
     assert_eq!(cleaned.property("_CIPComputed"), None);
     assert_eq!(
         cleaned.atom(AtomId::new(0)).unwrap().prop("atom-label"),
-        Some("center")
+        Some(&cosmolkit_model::PropertyValue::from("center"))
     );
     assert_eq!(cleaned.atom(AtomId::new(0)).unwrap().prop("_CIPCode"), None);
     assert_eq!(
         cleaned.bond(BondId::new(0)).unwrap().prop("bond-label"),
-        Some("wedge")
+        Some(&cosmolkit_model::PropertyValue::from("wedge"))
     );
     assert_eq!(
         cleaned.bond(BondId::new(0)).unwrap().prop("_CIPBondCode"),

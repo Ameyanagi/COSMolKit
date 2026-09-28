@@ -211,11 +211,11 @@ fn default_value_operation_updates_first_true_3d_conformer_and_clears_cip() {
     assert_eq!(output.property("source"), Some("preserved"));
     assert_eq!(
         output.atom(AtomId::new(0)).unwrap().prop("atom-label"),
-        Some("first")
+        Some(&cosmolkit_model::PropertyValue::from("first"))
     );
     assert_eq!(
         output.bond(BondId::new(0)).unwrap().prop("bond-label"),
-        Some("single")
+        Some(&cosmolkit_model::PropertyValue::from("single"))
     );
     assert_eq!(output.property("_CIPComputed"), None);
     assert_eq!(output.atom(AtomId::new(0)).unwrap().prop("_CIPCode"), None);
@@ -228,7 +228,7 @@ fn default_value_operation_updates_first_true_3d_conformer_and_clears_cip() {
     assert_eq!(source.property("_CIPComputed"), Some("true"));
     assert_eq!(
         source.atom(AtomId::new(0)).unwrap().prop("_CIPCode"),
-        Some("R")
+        Some(&cosmolkit_model::PropertyValue::from("R"))
     );
     assert!(!std::ptr::eq(source.topology(), output.topology()));
     coordinate_views::assert_detached_coordinates(&source, &output);

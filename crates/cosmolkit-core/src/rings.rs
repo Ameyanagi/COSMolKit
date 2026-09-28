@@ -950,6 +950,91 @@ impl RingInfo {
     }
 }
 
+/// Materialize aligned, already perceived ring rows in their original index domain.
+///
+/// Callers must supply rows filtered from an existing `RingInfo`; row counts and
+/// indices alone cannot establish that these are chemically valid cycles or a
+/// complete SSSR set. The result is initialized even when both inputs are empty.
+#[doc(hidden)]
+pub fn ring_info_from_selected_rows(
+    atom_count: usize,
+    bond_count: usize,
+    atom_rings: &[Vec<AtomId>],
+    bond_rings: &[Vec<BondId>],
+) -> Result<RingInfo, RingFindingError> {
+    // BEGIN RDKIT CPP FUNCTION SmilesWrite::MolFragmentToSmiles ring transport
+    // RDKit✔️❌:   // copy over the rings that only involve atoms/bonds in this fragment:
+    // RDKit✔️❌:   if (mol.getRingInfo()->isInitialized()) {
+    // RDKit✔️❌:     tmol.getRingInfo()->reset();
+    // RDKit✔️❌:     tmol.getRingInfo()->initialize();
+    // RDKit✔️❌:     for (unsigned int ridx = 0; ridx < mol.getRingInfo()->numRings(); ++ridx) {
+    // RDKit✔️❌:       const INT_VECT &aring = mol.getRingInfo()->atomRings()[ridx];
+    // RDKit✔️❌:       bool keepIt = true;
+    // RDKit✔️❌:       for (auto aidx : aring) {
+    // RDKit✔️❌:         if (!atomsInPlay[aidx]) {
+    // RDKit✔️❌:           keepIt = false;
+    // RDKit✔️❌:           break;
+    // RDKit✔️❌:         }
+    // RDKit✔️❌:       }
+    // RDKit✔️❌:       if (keepIt) {
+    // RDKit✔️❌:         const INT_VECT &bring = mol.getRingInfo()->bondRings()[ridx];
+    // RDKit✔️❌:         for (auto bidx : bring) {
+    // RDKit✔️❌:           if (!bondsInPlay[bidx]) {
+    // RDKit✔️❌:             keepIt = false;
+    // RDKit✔️❌:             break;
+    // RDKit✔️❌:           }
+    // RDKit✔️❌:         }
+    // RDKit✔️❌:         if (keepIt) {
+    // RDKit✔️❌:           tmol.getRingInfo()->addRing(aring, bring);
+    // RDKit✔️❌:         }
+    // RDKit✔️❌:       }
+    // RDKit✔️❌:     }
+    // RDKit✔️❌:   }
+    // END RDKIT CPP FUNCTION SmilesWrite::MolFragmentToSmiles ring transport
+    // A validation pass makes all malformed input fail before any row is
+    // installed. Construction then reuses the private source-shaped add_ring,
+    // preserving row/member order and original IDs. Both passes are linear in
+    // total members; the output has the same row and membership storage shape
+    // as RingInfo::addRing. The typed-to-index Vecs and validation pass add
+    // material temporary allocation/copy cost relative to the source.
+    if atom_rings.len() != bond_rings.len() {
+        return Err(RingFindingError::Value {
+            message: "ring atom/bond table length mismatch",
+        });
+    }
+    for (atoms, bonds) in atom_rings.iter().zip(bond_rings) {
+        if atoms.len() != bonds.len() {
+            return Err(RingFindingError::Value {
+                message: "length mismatch",
+            });
+        }
+        for atom in atoms {
+            if atom.index() >= atom_count {
+                return Err(RingFindingError::RingAtomOutOfRange {
+                    atom: atom.index(),
+                    atom_count,
+                });
+            }
+        }
+        for bond in bonds {
+            if bond.index() >= bond_count {
+                return Err(RingFindingError::RingBondOutOfRange {
+                    bond: bond.index(),
+                    bond_count,
+                });
+            }
+        }
+    }
+
+    let mut info = RingInfo::new(RingFindType::OtherOrUnknown, atom_count, bond_count);
+    for (atoms, bonds) in atom_rings.iter().zip(bond_rings) {
+        let atom_indices: Vec<usize> = atoms.iter().map(|atom| atom.index()).collect();
+        let bond_indices: Vec<usize> = bonds.iter().map(|bond| bond.index()).collect();
+        info.add_ring(&atom_indices, &bond_indices)?;
+    }
+    Ok(info)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RingSearchResult {
     find_type: RingFindType,
@@ -2992,4 +3077,91 @@ fn dfs_fast_find_rings(
     // END RDKIT CPP FUNCTION MolOps::_DFS
     atom_colors[atom] = 2;
     traversal_order.pop();
+}
+
+#[cfg(test)]
+mod selected_row_tests {
+    use super::*;
+
+    #[test]
+    fn ring_info_from_selected_rows_keeps_initialized_empty_membership() {
+        let rings = ring_info_from_selected_rows(5, 4, &[], &[]).unwrap();
+        assert!(rings.is_initialized());
+        assert_eq!(rings.find_type(), RingFindType::OtherOrUnknown);
+        assert_eq!(rings.num_rings(), 0);
+        assert_eq!(rings.atom_members(AtomId::new(4)), &[]);
+        assert_eq!(rings.bond_members(BondId::new(3)), &[]);
+        assert!(!rings.is_find_fast_or_better());
+    }
+
+    #[test]
+    fn ring_info_from_selected_rows_preserves_two_original_id_rows_and_memberships() {
+        // Rows are the fixed, source-ordered disconnected cycles from the
+        // core fast-ring owner regression, including non-dense bond IDs.
+        let atoms = vec![
+            vec![AtomId::new(2), AtomId::new(1), AtomId::new(0)],
+            vec![AtomId::new(5), AtomId::new(4), AtomId::new(3)],
+        ];
+        let bonds = vec![
+            vec![BondId::new(3), BondId::new(1), BondId::new(5)],
+            vec![BondId::new(2), BondId::new(0), BondId::new(4)],
+        ];
+        let originals = (atoms.clone(), bonds.clone());
+        let rings = ring_info_from_selected_rows(6, 6, &atoms, &bonds).unwrap();
+        assert_eq!(rings.atom_rings(), atoms);
+        assert_eq!(rings.bond_rings(), bonds);
+        assert_eq!(rings.atom_members(AtomId::new(1)), &[0]);
+        assert_eq!(rings.atom_members(AtomId::new(4)), &[1]);
+        assert_eq!(rings.bond_members(BondId::new(5)), &[0]);
+        assert_eq!(rings.bond_members(BondId::new(0)), &[1]);
+        assert_eq!((atoms, bonds), originals);
+    }
+
+    #[test]
+    fn ring_info_from_selected_rows_keeps_repeated_source_rows() {
+        let atoms = vec![vec![AtomId::new(2), AtomId::new(1), AtomId::new(0)]; 2];
+        let bonds = vec![vec![BondId::new(2), BondId::new(1), BondId::new(0)]; 2];
+        let rings = ring_info_from_selected_rows(3, 3, &atoms, &bonds).unwrap();
+        assert_eq!(rings.num_rings(), 2);
+        assert_eq!(rings.atom_rings(), atoms);
+        assert_eq!(rings.bond_rings(), bonds);
+        assert_eq!(rings.atom_members(AtomId::new(2)), &[0, 1]);
+        assert_eq!(rings.bond_members(BondId::new(2)), &[0, 1]);
+    }
+
+    #[test]
+    fn ring_info_from_selected_rows_rejects_unpaired_or_out_of_range_rows() {
+        let atom_row = vec![AtomId::new(0), AtomId::new(1), AtomId::new(2)];
+        let bond_row = vec![BondId::new(0), BondId::new(1), BondId::new(2)];
+        assert_eq!(
+            ring_info_from_selected_rows(3, 3, &[atom_row.clone()], &[]),
+            Err(RingFindingError::Value {
+                message: "ring atom/bond table length mismatch",
+            })
+        );
+        assert_eq!(
+            ring_info_from_selected_rows(3, 3, &[atom_row.clone()], &[vec![BondId::new(0)]]),
+            Err(RingFindingError::Value {
+                message: "length mismatch",
+            })
+        );
+        let mut bad_atoms = atom_row.clone();
+        bad_atoms[2] = AtomId::new(3);
+        assert_eq!(
+            ring_info_from_selected_rows(3, 3, &[bad_atoms], &[bond_row.clone()]),
+            Err(RingFindingError::RingAtomOutOfRange {
+                atom: 3,
+                atom_count: 3,
+            })
+        );
+        let mut bad_bonds = bond_row;
+        bad_bonds[1] = BondId::new(3);
+        assert_eq!(
+            ring_info_from_selected_rows(3, 3, &[atom_row], &[bad_bonds]),
+            Err(RingFindingError::RingBondOutOfRange {
+                bond: 3,
+                bond_count: 3,
+            })
+        );
+    }
 }

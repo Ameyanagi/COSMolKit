@@ -264,7 +264,7 @@ fn value_and_inplace_defaults_match_the_detached_owner_and_are_deterministic() {
     assert_eq!(short.property("_CIPComputed"), None);
     assert_eq!(
         short.atom(AtomId::new(0)).unwrap().prop("center-label"),
-        Some("preserved")
+        Some(&cosmolkit_model::PropertyValue::from("preserved"))
     );
     assert_eq!(short.atom(AtomId::new(0)).unwrap().prop("_CIPCode"), None);
 

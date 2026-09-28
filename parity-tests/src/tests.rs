@@ -458,12 +458,54 @@ fn selected_input_family_does_not_load_an_unselected_corpus() {
     let tasks = registry::select(Some("fuzzy_and")).unwrap();
     let cases = corpus(None, &tasks).unwrap();
     assert!(cases.molecules.is_empty());
-    assert_eq!(cases.fingerprints.len(), 6);
+    assert_eq!(cases.fingerprints.len(), 5000);
     assert!(
         corpus(Some(Path::new("missing.smi")), &tasks)
             .unwrap_err()
             .contains("input family")
     );
+}
+
+#[test]
+fn fingerprint_matrix_is_deterministic_complete_and_valid_for_both_widths() {
+    use registry::fingerprint_corpus::*;
+    let pairs = generate();
+    assert_eq!(PAIRS, 5000);
+    assert_eq!(pairs, generate());
+    assert_eq!(pairs.len(), PAIRS);
+    let cases = Corpus {
+        fingerprints: pairs,
+        molecules: vec![],
+    };
+    let tasks = fingerprint_tasks().unwrap();
+    registry::validate(&cases, &tasks).unwrap();
+    assert_eq!(tasks.iter().map(|t| t.count(&cases)).sum::<usize>(), 20_000);
+    for (shape, left_mask, right_mask) in SHAPES {
+        for length in LENGTHS {
+            for (counts, palette) in COUNTS {
+                let prefix = format!("fp5000-v1/{shape}/{length}/{counts}/");
+                let cell: Vec<_> = cases
+                    .fingerprints
+                    .iter()
+                    .filter(|p| p.id.starts_with(&prefix))
+                    .collect();
+                assert_eq!(cell.len(), SAMPLES_PER_CELL);
+                for pair in cell {
+                    assert_eq!(pair.length, length);
+                    assert_eq!(pair.left.len(), left_mask.count_ones() as usize);
+                    assert_eq!(pair.right.len(), right_mask.count_ones() as usize);
+                    for entries in [&pair.left, &pair.right] {
+                        assert!(entries.windows(2).all(|w| w[0].0 < w[1].0));
+                        assert!(
+                            entries
+                                .iter()
+                                .all(|&(key, value)| key < length && palette.contains(&value))
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]

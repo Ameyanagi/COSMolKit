@@ -286,9 +286,18 @@ fn live_value_commit_preserves_state_projects_rows_and_detaches_written_blocks()
         output.topology().stereo_groups,
         source.topology().stereo_groups
     );
-    assert_eq!(output.atoms()[0].prop("atom-note"), Some("a0"));
-    assert_eq!(output.atoms()[1].prop("atom-note"), Some("a1"));
-    assert_eq!(output.bonds()[0].prop("bond-note"), Some("b0"));
+    assert_eq!(
+        output.atoms()[0].prop("atom-note"),
+        Some(&cosmolkit_model::PropertyValue::from("a0"))
+    );
+    assert_eq!(
+        output.atoms()[1].prop("atom-note"),
+        Some(&cosmolkit_model::PropertyValue::from("a1"))
+    );
+    assert_eq!(
+        output.bonds()[0].prop("bond-note"),
+        Some(&cosmolkit_model::PropertyValue::from("b0"))
+    );
     assert_eq!(output.atoms()[0].prop("_CIPCode"), None);
     assert_eq!(output.bonds()[0].prop("_CIPCode"), None);
     assert_eq!(output.property("_CIPComputed"), None);

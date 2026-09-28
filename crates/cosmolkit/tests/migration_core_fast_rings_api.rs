@@ -161,19 +161,19 @@ fn value_operation_assigns_a_private_cache_and_preserves_every_input_block() {
     assert_eq!(output.property("_CIPComputed"), Some("true"));
     assert_eq!(
         output.atom(AtomId::new(0)).unwrap().prop("_CIPCode"),
-        Some("R")
+        Some(&cosmolkit_model::PropertyValue::from("R"))
     );
     assert_eq!(
         output.bond(BondId::new(0)).unwrap().prop("_CIPBondCode"),
-        Some("E")
+        Some(&cosmolkit_model::PropertyValue::from("E"))
     );
     assert_eq!(
         output.atom(AtomId::new(4)).unwrap().prop("atom-row"),
-        Some("4")
+        Some(&cosmolkit_model::PropertyValue::from("4"))
     );
     assert_eq!(
         output.bond(BondId::new(4)).unwrap().prop("bond-row"),
-        Some("4")
+        Some(&cosmolkit_model::PropertyValue::from("4"))
     );
     assert!(format!("{source:?}").contains("derived_cache_is_empty: true"));
     assert!(format!("{output:?}").contains("derived_cache_is_empty: false"));

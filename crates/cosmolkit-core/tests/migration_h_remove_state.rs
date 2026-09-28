@@ -7,8 +7,8 @@ use cosmolkit_core::{
 use cosmolkit_model::{
     Atom, AtomId, AtomSpec, Bond, BondDirection, BondId, BondSpec, ChiralTag, Conformer2D,
     Conformer3D, CoordinateBlock, CoordinateDimension, CoordinateValidationError,
-    MoleculeProperties, SdfPropertyList, SdfPropertyListTarget, StereoGroup, StereoGroupKind,
-    SubstanceGroup, SubstanceGroupId, SubstanceGroupKind, TopologyBlock,
+    MoleculeProperties, PropertyValue, SdfPropertyList, SdfPropertyListTarget, StereoGroup,
+    StereoGroupKind, SubstanceGroup, SubstanceGroupId, SubstanceGroupKind, TopologyBlock,
 };
 use cosmolkit_types::{BondOrder, Element};
 
@@ -347,7 +347,10 @@ fn empty_candidate_uses_identity_but_clears_only_computed_properties() {
         output.mapping,
         cosmolkit_model::TopologyMapping::identity(1, 0)
     );
-    assert_eq!(output.topology.atoms[0].prop("atom-user"), Some("keep"));
+    assert_eq!(
+        output.topology.atoms[0].prop("atom-user"),
+        Some(&PropertyValue::String("keep".to_owned()))
+    );
     assert_eq!(output.topology.atoms[0].prop("atom-cache"), None);
     assert_eq!(output.properties.name(), Some("named"));
     assert_eq!(output.properties.prop("user"), Some("keep"));
@@ -552,10 +555,19 @@ fn coordinates_property_lists_and_row_properties_follow_one_final_mapping() {
         output.properties.sdf_property_lists()[1].values(),
         &[Some("co".into())]
     );
-    assert_eq!(output.topology.atoms[0].prop("atom-user"), Some("c"));
+    assert_eq!(
+        output.topology.atoms[0].prop("atom-user"),
+        Some(&PropertyValue::String("c".to_owned()))
+    );
     assert_eq!(output.topology.atoms[0].prop("atom-cache"), None);
-    assert_eq!(output.topology.atoms[1].prop("atom-user"), Some("o"));
-    assert_eq!(output.topology.bonds[0].prop("bond-user"), Some("co"));
+    assert_eq!(
+        output.topology.atoms[1].prop("atom-user"),
+        Some(&PropertyValue::String("o".to_owned()))
+    );
+    assert_eq!(
+        output.topology.bonds[0].prop("bond-user"),
+        Some(&PropertyValue::String("co".to_owned()))
+    );
     assert_eq!(output.topology.bonds[0].prop("bond-cache"), None);
 }
 
