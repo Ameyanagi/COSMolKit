@@ -22,6 +22,8 @@ jobs:
             CARGO_LLVM_COV_TARGET_DIR: target/coverage-build
         steps:
             - uses: actions/checkout@v4
+              with:
+                  submodules: false
             - uses: dtolnay/rust-toolchain@stable
               with:
                   components: llvm-tools-preview
@@ -47,6 +49,22 @@ jobs:
                   test -s "$RUNNER_TEMP/test-packages.txt"
                   cat "$RUNNER_TEMP/test-packages.txt"
 
+            - name: Build libraries before fetching third-party test sources
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  packages=()
+                  while IFS= read -r package; do packages+=(-p "$package"); done < "$RUNNER_TEMP/test-packages.txt"
+                  cargo llvm-cov clean --workspace --profraw-only
+                  coverage_env="$(cargo llvm-cov show-env --sh)"
+                  eval "$coverage_env"
+                  export CARGO_TARGET_DIR="$CARGO_LLVM_COV_TARGET_DIR"
+                  cargo build "${packages[@]}" --lib --release \
+                      --features cosmolkit/op-contracts-strict,cosmolkit-core/op-contracts-strict
+
+            - name: Fetch pinned test sources only after successful compilation
+              run: git submodule update --init --depth 1 third_party/gemmi third_party/rdkit
+
             - name: Run all default crate regression suites with coverage
               id: regression
               continue-on-error: true
@@ -54,11 +72,10 @@ jobs:
               run: |
                   packages=()
                   while IFS= read -r package; do packages+=(-p "$package"); done < "$RUNNER_TEMP/test-packages.txt"
-                  # Reset measurements without discarding cached compilation.
-                  cargo llvm-cov clean --workspace --profraw-only
+                  # Reuse the instrumented libraries built before submodule initialization.
                   cargo llvm-cov "${packages[@]}" --release \
                       --features cosmolkit/op-contracts-strict,cosmolkit-core/op-contracts-strict \
-                      --no-report --no-fail-fast
+                      --no-clean --no-report --no-fail-fast
 
             - name: Run documentation tests
               id: doctests
@@ -102,8 +119,8 @@ jobs:
                   # Fuzzy tasks use the Rust-defined 5000-pair matrix (20000 comparisons).
                   # run prepares/reuses references and globally preflights before CK.
                   set +e
-                  cargo llvm-cov run -p cosmolkit-parity-tests --release --no-report \
-                      --features cosmolkit/op-contracts-strict \
+                  cargo llvm-cov run -p cosmolkit-parity-tests --release --no-clean --no-report \
+                      --features cosmolkit/op-contracts-strict,cosmolkit-core/op-contracts-strict \
                       -- run --corpus testdata/smiles/corpus/smiles_5000.smi \
                       --data "$PARITY_DATA" --python .venv/bin/python \
                       2>&1 | tee "$RUNNER_TEMP/parity-5000.log"

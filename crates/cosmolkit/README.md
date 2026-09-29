@@ -15,9 +15,11 @@ via `op-contracts-strict`.
 Applications that need a smaller dependency surface can disable defaults and
 enable only the capabilities they use:
 
+<!-- rust-install-version:start -->
 ```toml
-cosmolkit = { version = "0.5.0-rc.3", default-features = false, features = ["kekulize"] }
+cosmolkit = { version = "0.5.0-rc.8", default-features = false, features = ["kekulize"] }
 ```
+<!-- rust-install-version:end -->
 
 | Feature | Capability | Implementation crate(s) |
 |---|---|---|

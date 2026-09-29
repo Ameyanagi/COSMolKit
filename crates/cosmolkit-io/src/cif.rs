@@ -7,6 +7,10 @@
 use std::collections::HashSet;
 use std::fmt;
 
+mod mmjson;
+mod writer;
+pub(crate) use mmjson::{MmjsonReadError, read_mmjson_insitu};
+
 /// Validation performed after the CIF grammar has been parsed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CifCheckLevel {
@@ -154,6 +158,35 @@ pub struct CifLoop {
 }
 
 impl CifLoop {
+    pub(crate) fn add_row(&mut self, values: Vec<String>) -> Result<(), CifReadError> {
+        // Gemmi✔️✔️: template <typename T> void add_row(T new_values, int pos=-1) {
+        // Gemmi✔️✔️:   if (new_values.size() != tags.size())
+        // Gemmi✔️✔️:     fail("add_row(): wrong row length.");
+        // Gemmi✔️✔️:   add_values<T>(new_values, pos);
+        // Gemmi✔️✔️: }
+        // Gemmi✔️✔️: template <typename T> void add_values(T new_values, int pos=-1) {
+        // Gemmi✔️✔️:   auto it = values.end();
+        // Gemmi✔️✔️:   if (pos >= 0 && pos * width() < values.size())
+        // Gemmi✔️✔️:     it = values.begin() + pos * tags.size();
+        // Gemmi✔️✔️:   values.insert(it, new_values.begin(), new_values.end());
+        // Gemmi✔️✔️: }
+        // Behavior: the writer uses only default pos=-1: reject width before
+        // changing values and append in source order.
+        // Complexity: one row-length comparison and linear append of that row.
+        if values.len() != self.tags.len() {
+            return Err(CifReadError::new(
+                CifReadErrorKind::InvalidLoop,
+                "cif",
+                0,
+                0,
+                "add_row(): wrong row length.",
+            ));
+        }
+        self.values
+            .extend(values.into_iter().map(|raw| CifValue::new(raw, 0, 0)));
+        Ok(())
+    }
+
     pub fn tags(&self) -> &[String] {
         &self.tags
     }
@@ -239,7 +272,371 @@ pub struct CifBlock {
     line: usize,
 }
 
+#[cfg(test)]
+mod bio_legacy_c02_tests {
+    use super::{CifCheckLevel, CifItem, CifReadErrorKind, read_cif_document};
+
+    #[test]
+    fn bio_legacy_c02_empty_pair_and_loop_replacement_preserves_positions() {
+        let mut doc = read_cif_document("data_demo\n_other.id X\n_entity.id 1\n_other.mid Y\n_entity.type polymer\n_other.last Z\n", "c02", CifCheckLevel::Syntax).unwrap();
+        let block = &mut doc.blocks[0];
+        let row = block.init_mmcif_loop("_ENTITY", &["id", "type"]).unwrap();
+        assert_eq!(row.tags(), ["_ENTITY.id", "_ENTITY.type"]);
+        assert_eq!(block.items().len(), 4);
+        assert!(matches!(&block.items()[1], CifItem::Loop(_)));
+        assert_eq!(block.find_value("_other.mid").unwrap().raw(), "Y");
+        assert_eq!(block.find_value("_other.last").unwrap().raw(), "Z");
+        block
+            .init_mmcif_loop("_entity", &["new"])
+            .unwrap()
+            .add_row(vec!["3".into()])
+            .unwrap();
+        assert_eq!(block.items().len(), 4);
+        assert_eq!(
+            block
+                .find_loop("_entity.new")
+                .unwrap()
+                .value(0, 0)
+                .unwrap()
+                .raw(),
+            "3"
+        );
+        block.init_mmcif_loop("_entity", &["reset"]).unwrap();
+        assert!(block.find_loop("_entity.reset").unwrap().is_empty());
+        block.erase_mmcif_category("_entity");
+        assert_eq!(block.items().len(), 3);
+        assert_eq!(
+            block
+                .items()
+                .iter()
+                .filter(|item| matches!(item, CifItem::Pair(_)))
+                .count(),
+            3
+        );
+        block.init_mmcif_loop("_new", &["id"]).unwrap();
+        assert!(matches!(block.items().last(), Some(CifItem::Loop(_))));
+    }
+
+    #[test]
+    fn bio_legacy_c02_width_error_atomic_and_pair_erasure() {
+        let mut doc = read_cif_document(
+            "data_demo\n_entity.id 1\n_other.id 4\n_entity.type polymer\n",
+            "c02",
+            CifCheckLevel::Syntax,
+        )
+        .unwrap();
+        let block = &mut doc.blocks[0];
+        block.erase_mmcif_category("_entity.");
+        assert_eq!(block.items().len(), 1);
+        assert_eq!(block.find_value("_other.id").unwrap().raw(), "4");
+        let loop_ = block.init_mmcif_loop("_entity", &["id", "type"]).unwrap();
+        let before = loop_.clone();
+        let error = loop_.add_row(vec!["1".into()]).unwrap_err();
+        assert_eq!(error.kind(), CifReadErrorKind::InvalidLoop);
+        assert_eq!(error.message(), "add_row(): wrong row length.");
+        assert_eq!(*loop_, before);
+        loop_.add_row(vec!["1".into(), "polymer".into()]).unwrap();
+        assert_eq!(loop_.value(0, 1).unwrap().raw(), "polymer");
+    }
+}
+
+#[cfg(test)]
+mod bio_legacy_c01_tests {
+    use super::{CifBlock, CifCheckLevel, CifItem, read_cif_document};
+
+    fn block(text: &str) -> CifBlock {
+        read_cif_document(text, "c01", CifCheckLevel::Syntax)
+            .unwrap()
+            .blocks
+            .remove(0)
+    }
+
+    #[test]
+    fn bio_legacy_c01_pair_first_position_case_category_and_empty_span() {
+        let mut data =
+            block("data_demo\n_entry.id old\n_other.id keep\n_ENTRY.extra 1\n_other.extra 2\n");
+        data.set_pair_in_category(Some("_ENTRY"), "_ENTRY.ID", "new".into());
+        assert_eq!(data.items().len(), 4);
+        assert_eq!(data.find_pair("_entry.id").unwrap().tag(), "_ENTRY.ID");
+        assert_eq!(data.find_value("_entry.id").unwrap().raw(), "new");
+        data.set_pair_in_category(Some("_entry"), "_entry.second", "next".into());
+        assert!(matches!(&data.items()[3], CifItem::Pair(pair) if pair.tag() == "_entry.second"));
+        assert_eq!(data.find_value("_other.extra").unwrap().raw(), "2");
+        data.set_pair_in_category(Some("_absent."), "_absent.id", "fresh".into());
+        assert!(
+            matches!(data.items().last(), Some(CifItem::Pair(pair)) if pair.tag() == "_absent.id")
+        );
+        let mut blank = block("data_empty\n");
+        blank.set_pair_in_category(None, "_entry.id", "1".into());
+        assert_eq!(blank.find_value("_entry.id").unwrap().raw(), "1");
+    }
+
+    #[test]
+    fn bio_legacy_c01_loop_column_replacement_retains_unrelated_item() {
+        let mut data =
+            block("data_demo\n_other.id X\nloop_\n_atom.id\n_atom.type\n1 C\n2 N\n_other.more Y\n");
+        data.set_pair_in_category(Some("_atom"), "_atom.id", "9".into());
+        assert!(
+            matches!(&data.items()[1], CifItem::Pair(pair) if pair.tag() == "_atom.id" && pair.value().unwrap().raw() == "9")
+        );
+        assert!(data.find_loop("_atom.type").is_none());
+        assert_eq!(data.find_value("_other.more").unwrap().raw(), "Y");
+    }
+}
+
 impl CifBlock {
+    pub(crate) fn init_mmcif_loop(
+        &mut self,
+        category: &str,
+        suffixes: &[&str],
+    ) -> Result<&mut CifLoop, CifReadError> {
+        // Gemmi✔️✔️: ensure_mmcif_category(cat);  // modifies cat
+        // Gemmi✔️✔️: return setup_loop(find_mmcif_category(cat), cat, std::move(tags));
+        // Gemmi✔️✔️: if (tab.loop_item) {
+        // Gemmi✔️✔️:   item = tab.loop_item;
+        // Gemmi✔️✔️:   item->loop.clear();
+        // Gemmi✔️✔️: } else if (tab.ok()) {
+        // Gemmi✔️✔️:   item = &tab.bloc.items.at(tab.positions[0]);
+        // Gemmi✔️✔️:   tab.erase();
+        // Gemmi✔️✔️:   item->set_value(Item(LoopArg{}));
+        // Gemmi✔️✔️: } else {
+        // Gemmi✔️✔️:   items.emplace_back(LoopArg{});
+        // Gemmi✔️✔️:   item = &items.back();
+        // Gemmi✔️✔️: }
+        // Gemmi✔️✔️: for (std::string& tag : tags) {
+        // Gemmi✔️✔️:   tag.insert(0, prefix);
+        // Gemmi✔️✔️:   assert_tag(tag);
+        // Gemmi✔️✔️: }
+        // Gemmi✔️✔️: item->loop.tags = std::move(tags);
+        // Behavior: existing loop takes priority over pairs; otherwise retain
+        // first matching pair position and erase remaining category pairs.
+        // Complexity: linear scan and Vec retention, no parallel order store.
+        assert!(
+            category.starts_with('_'),
+            "CIF category must start with '_'"
+        );
+        let prefix = if category.ends_with('.') {
+            category.to_owned()
+        } else {
+            format!("{category}.")
+        };
+        let tags = suffixes
+            .iter()
+            .map(|suffix| format!("{prefix}{suffix}"))
+            .collect::<Vec<_>>();
+        let mut pairs = Vec::new();
+        let mut loop_index = None;
+        for (index, item) in self.items.iter().enumerate() {
+            match item {
+                CifItem::Pair(pair)
+                    if pair
+                        .tag
+                        .get(..prefix.len())
+                        .is_some_and(|head| head.eq_ignore_ascii_case(&prefix)) =>
+                {
+                    pairs.push(index)
+                }
+                CifItem::Loop(row)
+                    if row.tags.first().is_some_and(|tag| {
+                        tag.get(..prefix.len())
+                            .is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
+                    }) =>
+                {
+                    if let Some(tag) = row.tags.iter().find(|tag| {
+                        !tag.get(..prefix.len())
+                            .is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
+                    }) {
+                        return Err(self.error(
+                            CifReadErrorKind::InvalidLoop,
+                            row.line,
+                            1,
+                            format!("Tag {tag} in loop with {}", prefix.to_ascii_lowercase()),
+                        ));
+                    }
+                    loop_index = Some(index);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if let Some(index) = loop_index {
+            let CifItem::Loop(row) = &mut self.items[index] else {
+                unreachable!()
+            };
+            row.tags = tags;
+            row.values.clear();
+            return Ok(row);
+        }
+        let index = pairs.first().copied().unwrap_or(self.items.len());
+        if !pairs.is_empty() {
+            self.items.retain(|item| !matches!(item, CifItem::Pair(pair) if pair.tag.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(&prefix))));
+        }
+        self.items.insert(
+            index,
+            CifItem::Loop(CifLoop {
+                tags,
+                values: Vec::new(),
+                line: 0,
+            }),
+        );
+        let CifItem::Loop(row) = &mut self.items[index] else {
+            unreachable!()
+        };
+        Ok(row)
+    }
+
+    pub(crate) fn erase_mmcif_category(&mut self, category: &str) {
+        // Gemmi✔️✔️: if (loop_item) {
+        // Gemmi✔️✔️:   loop_item->erase();
+        // Gemmi✔️✔️:   loop_item = nullptr;
+        // Gemmi✔️✔️: } else {
+        // Gemmi✔️✔️:   for (int pos : positions)
+        // Gemmi✔️✔️:     if (pos >= 0)
+        // Gemmi✔️✔️:       bloc.items[pos].erase();
+        // Gemmi✔️✔️: }
+        // Gemmi✔️✔️: positions.clear();
+        // Behavior: first matching loop wins; without a loop all pairs of
+        // the category are erased. Removing erased slots retains item order.
+        // Complexity: linear scans and one in-place Vec compaction.
+        assert!(
+            category.starts_with('_'),
+            "CIF category must start with '_'"
+        );
+        let prefix = if category.ends_with('.') {
+            category.to_owned()
+        } else {
+            format!("{category}.")
+        };
+        let mut pair_indices = Vec::new();
+        let mut loop_index = None;
+        for (index, item) in self.items.iter().enumerate() {
+            match item {
+                CifItem::Pair(pair)
+                    if pair
+                        .tag
+                        .get(..prefix.len())
+                        .is_some_and(|head| head.eq_ignore_ascii_case(&prefix)) =>
+                {
+                    pair_indices.push(index)
+                }
+                CifItem::Loop(row)
+                    if row.tags.first().is_some_and(|tag| {
+                        tag.get(..prefix.len())
+                            .is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
+                    }) =>
+                {
+                    loop_index = Some(index);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if let Some(index) = loop_index {
+            self.items.remove(index);
+        } else if !pair_indices.is_empty() {
+            self.items.retain(|item| !matches!(item, CifItem::Pair(pair) if pair.tag.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(&prefix))));
+        }
+    }
+
+    /// Update a pair in place, or insert immediately after its category span.
+    /// Raw values must already be CIF-quoted by the writer.
+    pub(crate) fn set_pair_in_category(
+        &mut self,
+        category: Option<&str>,
+        tag: &str,
+        value: String,
+    ) {
+        // Gemmi✔️✔️: ItemSpan(std::vector<Item>& items, std::string prefix)
+        // Gemmi✔️✔️:     : ItemSpan(items) {
+        // Gemmi✔️✔️:   assert_tag(prefix);
+        // Gemmi✔️✔️:   prefix = gemmi::to_lower(prefix);
+        // Gemmi✔️✔️:   while (begin_ != end_ && !items_[begin_].has_prefix(prefix))
+        // Gemmi✔️✔️:     ++begin_;
+        // Gemmi✔️✔️:   if (begin_ != end_)
+        // Gemmi✔️✔️:     while (end_-1 != begin_ && !items_[end_-1].has_prefix(prefix))
+        // Gemmi✔️✔️:       --end_;
+        // Gemmi✔️✔️: }
+        // Gemmi✔️✔️: assert_tag(tag);
+        // Gemmi✔️✔️: std::string lctag = gemmi::to_lower(tag);
+        // Gemmi✔️✔️: auto end = items_.begin() + end_;
+        // Gemmi✔️✔️: for (auto i = items_.begin() + begin_; i != end; ++i) {
+        // Gemmi✔️✔️:   if (i->type == ItemType::Pair && gemmi::iequal(i->pair[0], lctag)) {
+        // Gemmi✔️✔️:     i->pair[0] = tag;  // if letter case differs, the tag changes
+        // Gemmi✔️✔️:     i->pair[1] = value;
+        // Gemmi✔️✔️:     return;
+        // Gemmi✔️✔️:   }
+        // Gemmi✔️✔️:   if (i->type == ItemType::Loop && i->loop.find_tag_lc(lctag) != -1) {
+        // Gemmi✔️✔️:     i->set_value(Item(tag, value));
+        // Gemmi✔️✔️:     return;
+        // Gemmi✔️✔️:   }
+        // Gemmi✔️✔️: }
+        // Gemmi✔️✔️: items_.emplace(end, tag, value);
+        // Gemmi✔️✔️: ++end_;
+        // Behavior: first matching item only is replaced, using the caller's
+        // tag case; span bounds are first/last matching category items.
+        // Complexity: two linear scans plus at most one Vec insertion/move;
+        // no copied document or second ordering representation.
+        assert!(tag.starts_with('_'), "CIF tag must start with '_'");
+        let span = if let Some(prefix) = category {
+            assert!(prefix.starts_with('_'), "CIF category must start with '_'");
+            let prefix = if prefix.ends_with('.') {
+                prefix.to_owned()
+            } else {
+                format!("{prefix}.")
+            };
+            let has_prefix = |item: &CifItem| match item {
+                CifItem::Pair(pair) => pair
+                    .tag
+                    .get(..prefix.len())
+                    .is_some_and(|head| head.eq_ignore_ascii_case(&prefix)),
+                CifItem::Loop(loop_) => loop_.tags.first().is_some_and(|tag| {
+                    tag.get(..prefix.len())
+                        .is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
+                }),
+                CifItem::Frame(_) => false,
+            };
+            let begin = self
+                .items
+                .iter()
+                .position(&has_prefix)
+                .unwrap_or(self.items.len());
+            let end = self
+                .items
+                .iter()
+                .rposition(has_prefix)
+                .map_or(begin, |index| index + 1);
+            begin..end
+        } else {
+            0..self.items.len()
+        };
+        for item in &mut self.items[span.clone()] {
+            match item {
+                CifItem::Pair(pair) if pair.tag.eq_ignore_ascii_case(tag) => {
+                    pair.tag = tag.to_owned();
+                    pair.value = Some(CifValue::new(value, 0, 0));
+                    return;
+                }
+                CifItem::Loop(loop_) if loop_.find_tag(tag).is_some() => {
+                    *item = CifItem::Pair(CifPair {
+                        tag: tag.to_owned(),
+                        value: Some(CifValue::new(value, 0, 0)),
+                        line: 0,
+                    });
+                    return;
+                }
+                _ => {}
+            }
+        }
+        self.items.insert(
+            span.end,
+            CifItem::Pair(CifPair {
+                tag: tag.to_owned(),
+                value: Some(CifValue::new(value, 0, 0)),
+                line: 0,
+            }),
+        );
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }

@@ -176,8 +176,8 @@ fn binding_contract_matches_the_public_bio_residue_surface() {
         assert_eq!(row.javascript_name, rust_name);
         assert_eq!(row.feature, "bio");
         assert_eq!(row.exposure, BindingExposure::Public);
-        assert_eq!(row.support, BindingSupport::SupportedWithRdkitParity);
-        assert_eq!(row.parity, BindingParity::RequiredNow);
+        assert_eq!(row.support, BindingSupport::Experimental);
+        assert_eq!(row.parity, BindingParity::RequiredWhenSupported);
         assert!(row.callable.is_none());
     }
 
@@ -251,8 +251,8 @@ fn binding_contract_matches_the_public_bio_residue_surface() {
         assert_eq!(row.javascript_name, javascript);
         assert_eq!(row.feature, "bio");
         assert_eq!(row.exposure, BindingExposure::Public);
-        assert_eq!(row.support, BindingSupport::SupportedWithRdkitParity);
-        assert_eq!(row.parity, BindingParity::RequiredNow);
+        assert_eq!(row.support, BindingSupport::Experimental);
+        assert_eq!(row.parity, BindingParity::RequiredWhenSupported);
         assert!(row.type_role.is_none());
         let callable = row.callable.unwrap();
         assert_eq!(callable.kind, BindingKind::Module);

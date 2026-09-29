@@ -26,6 +26,14 @@ pub enum BindingKind {
     Module,
 }
 
+/// Ownership of an instance callable's receiver, independent of its output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BindingReceiver {
+    Shared,
+    Mutable,
+    Owned,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BindingDefault {
     Required,
@@ -42,6 +50,7 @@ pub struct BindingParameterContract {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BindingCallableContract {
     pub kind: BindingKind,
+    pub receiver: Option<BindingReceiver>,
     pub parameters: &'static [BindingParameterContract],
     pub output_type: &'static str,
     pub error_type: Option<&'static str>,

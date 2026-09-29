@@ -26,8 +26,8 @@ fn public_pdb_preserves_structure_and_explicitly_projects_protein() {
     let protein = Protein::from_pdb(&text).unwrap();
     assert_eq!(protein, structure.protein().unwrap());
     assert_eq!(protein.num_atoms(), 1);
-    assert_eq!(protein.atoms()[0].name().as_str(), " CA ");
-    assert_eq!(protein.atoms()[0].position(), [1.0, 2.0, 3.0]);
+    assert_eq!(protein.atoms().next().unwrap().name().as_str(), " CA ");
+    assert_eq!(protein.atoms().next().unwrap().position(), [1.0, 2.0, 3.0]);
 }
 
 #[test]

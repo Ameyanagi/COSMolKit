@@ -38,6 +38,12 @@ enum CallableKind {
     Module,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Receiver {
+    Shared,
+    Mutable,
+    Owned,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StateModel {
     ValueReturning,
     InPlace,
@@ -153,6 +159,7 @@ struct BindingEntry {
 
 struct CallablePayload {
     kind: CallableKind,
+    receiver: Option<Receiver>,
     parameters: Vec<BindingParameter>,
     output: Type,
     error: ErrorType,
@@ -174,6 +181,7 @@ struct BindingEntryDraft {
     support: Option<Ident>,
     parity: Option<Ident>,
     kind: Option<Ident>,
+    receiver: Option<Ident>,
     parameters: Option<Vec<BindingParameter>>,
     output: Option<Type>,
     error: Option<ErrorType>,
@@ -234,6 +242,7 @@ fn parse_binding_entry(
             "support" => set_once(&mut draft.support, input.parse()?, &key)?,
             "parity" => set_once(&mut draft.parity, input.parse()?, &key)?,
             "kind" => set_once(&mut draft.kind, input.parse()?, &key)?,
+            "receiver" => set_once(&mut draft.receiver, input.parse()?, &key)?,
             "parameters" => {
                 let values;
                 bracketed!(values in input);
@@ -295,7 +304,29 @@ fn finish_entry(cfg_attrs: Vec<Attribute>, draft: BindingEntryDraft) -> syn::Res
             }
             let kind_ident = required(draft.kind, "kind")?;
             let state_ident = required(draft.state, "state")?;
+            let kind = parse_kind(&kind_ident)?;
+            let state = parse_state(&state_ident)?;
+            let receiver = match draft.receiver {
+                Some(value) => Some(match value.to_string().as_str() {
+                    "shared" => Receiver::Shared,
+                    "mutable" => Receiver::Mutable,
+                    "owned" => Receiver::Owned,
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            value,
+                            "receiver must be shared, mutable or owned",
+                        ));
+                    }
+                }),
+                None if kind == CallableKind::Instance => Some(if state == StateModel::InPlace {
+                    Receiver::Mutable
+                } else {
+                    Receiver::Shared
+                }),
+                None => None,
+            };
             let payload = CallablePayload {
+                receiver,
                 kind: parse_kind(&kind_ident)?,
                 parameters: required(draft.parameters, "parameters")?,
                 output: required(draft.output, "output")?,
@@ -308,6 +339,7 @@ fn finish_entry(cfg_attrs: Vec<Attribute>, draft: BindingEntryDraft) -> syn::Res
         }
         ItemClass::Type => {
             reject_present(draft.kind, "kind", "type", &item_ident)?;
+            reject_present(draft.receiver, "receiver", "type", &item_ident)?;
             reject_present(draft.parameters, "parameters", "type", &item_ident)?;
             reject_present(draft.output, "output", "type", &item_ident)?;
             reject_present(draft.error, "error", "type", &item_ident)?;
@@ -406,6 +438,28 @@ fn validate_callable(
     javascript: &LitStr,
     payload: &CallablePayload,
 ) -> syn::Result<()> {
+    if (payload.kind == CallableKind::Instance) != payload.receiver.is_some() {
+        return Err(syn::Error::new_spanned(
+            rust,
+            "receiver is only valid on an instance callable",
+        ));
+    }
+    if let Some(receiver) = payload.receiver {
+        let valid = match receiver {
+            Receiver::Shared => payload.state != StateModel::InPlace,
+            Receiver::Mutable => payload.state == StateModel::InPlace,
+            Receiver::Owned => {
+                payload.state == StateModel::ValueReturning
+                    && matches!(payload.operation, OperationLink::None)
+            }
+        };
+        if !valid {
+            return Err(syn::Error::new_spanned(
+                rust,
+                "receiver conflicts with state or operation lifecycle",
+            ));
+        }
+    }
     match (owner, payload.kind) {
         (Owner::Molecule, CallableKind::Instance | CallableKind::Static)
         | (Owner::Type, CallableKind::Instance | CallableKind::Static)
@@ -516,36 +570,19 @@ fn validate_signature(owner: Owner, rust: &Path, payload: &CallablePayload) -> s
         ));
     }
     if payload.kind == CallableKind::Instance {
-        let expected: Type = match owner {
-            Owner::Molecule if payload.state == StateModel::InPlace => {
-                syn::parse_quote!(&mut crate::Molecule)
-            }
-            Owner::Molecule => syn::parse_quote!(&crate::Molecule),
+        let receiver_path: Path = match owner {
+            Owner::Molecule => syn::parse_quote!(crate::Molecule),
             Owner::Type => {
-                let mut receiver_path = rust.clone();
-                receiver_path.segments.pop();
-                receiver_path.segments.pop_punct();
-                if receiver_path.segments.is_empty() {
+                let mut path = rust.clone();
+                path.segments.pop();
+                path.segments.pop_punct();
+                if path.segments.is_empty() {
                     return Err(syn::Error::new_spanned(
                         rust,
-                        "type-owned callable path must include its receiver type",
+                        "type-owned callable needs a receiver type",
                     ));
                 }
-                match payload.state {
-                    StateModel::InPlace => syn::parse_quote!(&mut #receiver_path),
-                    StateModel::ReadOnly => syn::parse_quote!(&#receiver_path),
-                    // BIO public objects, like Molecule, preserve the receiver
-                    // when producing a new COW value. Ordinary value types
-                    // retain their existing consuming-receiver contract.
-                    StateModel::ValueReturning
-                        if receiver_path.segments.last().is_some_and(|segment| {
-                            segment.ident == "BioStructure" || segment.ident == "Protein"
-                        }) =>
-                    {
-                        syn::parse_quote!(&#receiver_path)
-                    }
-                    StateModel::ValueReturning => syn::parse_quote!(#receiver_path),
-                }
+                path
             }
             Owner::Module => {
                 return Err(syn::Error::new_spanned(
@@ -553,6 +590,11 @@ fn validate_signature(owner: Owner, rust: &Path, payload: &CallablePayload) -> s
                     "module callable cannot have an instance receiver",
                 ));
             }
+        };
+        let expected: Type = match payload.receiver.expect("validated instance receiver") {
+            Receiver::Shared => syn::parse_quote!(&#receiver_path),
+            Receiver::Mutable => syn::parse_quote!(&mut #receiver_path),
+            Receiver::Owned => syn::parse_quote!(#receiver_path),
         };
         if receiver_metadata_tokens(inputs[0]) != receiver_metadata_tokens(&expected) {
             return Err(syn::Error::new_spanned(
@@ -784,9 +826,15 @@ fn expand_registry(registry: BindingRegistry) -> syn::Result<proc_macro2::TokenS
                     OperationLink::None => quote!(None),
                     OperationLink::Id(id) => quote!(Some(#id)),
                 };
+                let receiver = match payload.receiver {
+                    Some(Receiver::Shared) => quote!(Some(crate::BindingReceiver::Shared)),
+                    Some(Receiver::Mutable) => quote!(Some(crate::BindingReceiver::Mutable)),
+                    Some(Receiver::Owned) => quote!(Some(crate::BindingReceiver::Owned)),
+                    None => quote!(None),
+                };
                 (
                     quote!(Some(crate::BindingCallableContract {
-                        kind: #kind, parameters: &[#(#parameters),*], output_type: stringify!(#output),
+                        kind: #kind, receiver: #receiver, parameters: &[#(#parameters),*], output_type: stringify!(#output),
                         error_type: #error, state_model: #state, operation_semantic_id: #operation,
                     })),
                     quote!(None),

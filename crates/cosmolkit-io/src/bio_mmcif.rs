@@ -5,8 +5,8 @@ use super::bio_pdb::{
     rename_ccd_sequence_tokens,
 };
 use crate::cif::{
-    CifBlock, CifCheckLevel, CifReadError, CifReadErrorKind, CifRow, CifTable, CifValue,
-    cif_as_char, cif_as_f64, cif_as_i32, cif_as_string, cif_is_null, read_cif_document,
+    CifBlock, CifCheckLevel, CifDocument, CifReadError, CifReadErrorKind, CifRow, CifTable,
+    CifValue, cif_as_char, cif_as_f64, cif_as_i32, cif_as_string, cif_is_null, read_cif_document,
 };
 use cosmolkit_bio::{
     AltLocLabel, AtomAddress, AtomName, AtomSourceIds, BioAssembly, BioAssemblyGenerator,
@@ -5662,6 +5662,14 @@ pub fn read_mmcif_bio_structure(
     text: &str,
     source_name: &str,
 ) -> Result<BioStructureData, BioMmcifReadError> {
+    let document = read_cif_document(text, source_name, CifCheckLevel::Default)
+        .map_err(|error| BioMmcifReadError::new(BioMmcifReadStage::CifDocument, error))?;
+    populate_mmcif_bio_structure_document(&document)
+}
+
+pub(crate) fn populate_mmcif_bio_structure_document(
+    document: &CifDocument,
+) -> Result<BioStructureData, BioMmcifReadError> {
     // Gemmi❗❌: void populate_structure_from_block(const cif::Block& block_, Structure& st) {
     // Gemmi❗❌:   // find() and Table don't have const variants, but we don't change anything.
     // Gemmi❗❌:   cif::Block& block = const_cast<cif::Block&>(block_);
@@ -5723,17 +5731,15 @@ pub fn read_mmcif_bio_structure(
     // Gemmi❗❌: }
     // Behavior review: preserve the complete source call order, including
     // NCS before fractional transform, ORIGX afterward, SIFTS after assembly
-    // creation, and CCD restoration last. The text reader uses Gemmi's default
-    // CIF check level and `make_structure` block selector. It never enters the
-    // separate chemcomp-coordinate reader. Each helper's structured failure
+    // creation, and CCD restoration last. The text wrapper uses the default
+    // CIF check level; this shared path uses `make_structure` block selection
+    // and never enters the separate chemcomp-coordinate reader. Each structured failure
     // aborts this local staging path; no partially built BIO value escapes.
     // Complexity review: each source category is selected/converted once.
     // The detached grouping and parsed-atom vectors retain additional O(A)
     // state versus Gemmi's direct hierarchy writes, and source-address maps
     // retain their existing ordered linear scans; therefore the cost axis is
     // intentionally marked worse until complete-reader profiling/review.
-    let document = read_cif_document(text, source_name, CifCheckLevel::Default)
-        .map_err(|error| BioMmcifReadError::new(BioMmcifReadStage::CifDocument, error))?;
     let block = select_coordinate_block(document.blocks(), document.source())
         .map_err(|error| BioMmcifReadError::new(BioMmcifReadStage::CoordinateBlock, error))?;
 
@@ -6081,7 +6087,8 @@ mod tests {
         parse_mmcif_experimental_info, parse_mmcif_helices, parse_mmcif_modified_residues,
         parse_mmcif_ncs_origx_info, parse_mmcif_operation_expr, parse_mmcif_refinement_info,
         parse_mmcif_reflns_info, parse_mmcif_sheets, parse_mmcif_software_info,
-        parse_mmcif_tls_info, project_mmcif_atom_site_scalars, resolve_mmcif_label_address,
+        parse_mmcif_tls_info, populate_mmcif_bio_structure_document,
+        project_mmcif_atom_site_scalars, read_mmcif_bio_structure, resolve_mmcif_label_address,
         select_coordinate_block,
     };
     use crate::cif::{CifBlock, CifCheckLevel, CifReadErrorKind, CifTable, read_cif_document};
@@ -6446,6 +6453,55 @@ mod tests {
         let projected = parse_mmcif_ncs_origx_info(&no_code_column.blocks()[0]).unwrap();
         assert_eq!(projected.ncs_operators.len(), 1);
         assert!(!projected.ncs_operators[0].given);
+    }
+
+    #[test]
+    fn bio_legacy_n02_identity_id_last_wins_and_nonidentity_order_is_stable() {
+        const HEADER: &str = concat!(
+            "data_ncs\nloop_\n",
+            "_struct_ncs_oper.matrix[1][1]\n_struct_ncs_oper.matrix[1][2]\n_struct_ncs_oper.matrix[1][3]\n_struct_ncs_oper.vector[1]\n",
+            "_struct_ncs_oper.matrix[2][1]\n_struct_ncs_oper.matrix[2][2]\n_struct_ncs_oper.matrix[2][3]\n_struct_ncs_oper.vector[2]\n",
+            "_struct_ncs_oper.matrix[3][1]\n_struct_ncs_oper.matrix[3][2]\n_struct_ncs_oper.matrix[3][3]\n_struct_ncs_oper.vector[3]\n",
+            "_struct_ncs_oper.id\n_struct_ncs_oper.code\n",
+        );
+        const ID_A: &str = "1 0 0 0 0 1 0 0 0 0 1 0 id_a given\n";
+        const ID_B: &str = "1 0 0 0 0 1 0 0 0 0 1 0 id_b generated\n";
+        const OP_A: &str = "1 0 0 2 0 1 0 0 0 0 1 0 op_a given\n";
+        const OP_B: &str = "1 0 0 3 0 1 0 0 0 0 1 0 op_b generated\n";
+        const INCOMPLETE: &str = ". 0 0 0 0 1 0 0 0 0 1 0 missing given\n";
+        for (rows, identity, operators) in [
+            (OP_A.to_owned(), None, &["op_a"][..]),
+            (format!("{ID_A}{OP_A}"), Some("id_a"), &["op_a"]),
+            (
+                format!("{OP_A}{ID_A}{INCOMPLETE}{ID_B}{OP_B}"),
+                Some("id_b"),
+                &["op_a", "op_b"],
+            ),
+        ] {
+            let content = format!("{HEADER}{rows}");
+            let doc = document(&content, "n02.cif");
+            let projected = parse_mmcif_ncs_origx_info(&doc.blocks()[0]).unwrap();
+            assert_eq!(
+                projected
+                    .source_state
+                    .info
+                    .get("_struct_ncs_oper.id")
+                    .map(String::as_str),
+                identity
+            );
+            assert_eq!(
+                projected
+                    .ncs_operators
+                    .iter()
+                    .map(|op| op.id.as_str())
+                    .collect::<Vec<_>>(),
+                operators
+            );
+            assert!(projected.ncs_operators[0].given);
+            if projected.ncs_operators.len() > 1 {
+                assert!(!projected.ncs_operators[1].given);
+            }
+        }
     }
 
     #[test]
@@ -8038,6 +8094,45 @@ mod tests {
         let table = atom_site_table(&document.blocks()[0]);
         let row = table.row(0).expect("fixed one-row C05 atom_site table");
         project_mmcif_atom_site_scalars(row, has_d_fraction)
+    }
+
+    #[test]
+    fn bio_read_c01_factored_document_matches_text_entry_and_source_metadata() {
+        // Gemmi mmcif.hpp::make_structure selects block zero after checking
+        // later blocks. A chemcomp-only block still follows ordinary mmCIF
+        // population here, rather than the separate chemcomp coordinate path.
+        let text = concat!(
+            "data_component_only\n",
+            "_entry.id DEMO\n",
+            "_chem_comp.id LIG\n",
+            "_chem_comp.three_letter_code LIG\n",
+            "data_restraints\n",
+            "_chem_comp.id OTHER\n",
+        );
+        let parsed = document(text, "source.cif");
+        let direct = populate_mmcif_bio_structure_document(&parsed).unwrap();
+        let text_entry = read_mmcif_bio_structure(text, "source.cif").unwrap();
+        assert_eq!(direct, text_entry);
+        assert_eq!(direct.source_state().name, "component_only");
+        assert_eq!(
+            direct.input_format(),
+            cosmolkit_bio::BioCoordinateFormat::Mmcif
+        );
+        assert!(direct.atoms().is_empty());
+    }
+
+    #[test]
+    fn bio_read_c01_empty_and_later_coordinate_errors_preserve_stage_and_source() {
+        let empty = read_mmcif_bio_structure("", "empty.cif").unwrap_err();
+        assert_eq!(empty.stage(), super::BioMmcifReadStage::CifDocument);
+        let text = "data_first\n_entry.id first\ndata_second\n_atom_site.id 1\n";
+        let parsed = document(text, "later.cif");
+        let direct = populate_mmcif_bio_structure_document(&parsed).unwrap_err();
+        let wrapped = read_mmcif_bio_structure(text, "later.cif").unwrap_err();
+        assert_eq!(direct.stage(), super::BioMmcifReadStage::CoordinateBlock);
+        assert_eq!(direct.stage(), wrapped.stage());
+        assert_eq!(direct.to_string(), wrapped.to_string());
+        assert!(direct.to_string().contains("block #2: later.cif"));
     }
 
     #[test]

@@ -345,6 +345,21 @@ contract metadata. The public API manifest is the source of truth for naming,
 receiver classification, and language projections. The two registries must
 refer to the same logical operation rather than define duplicate behavior.
 
+### Instance receiver ownership
+
+The binding registry declares `receiver: shared`, `receiver: mutable`, or
+`receiver: owned`, independently of the result type. An omitted instance
+receiver defaults to `mutable` for `in_place`, otherwise `shared`; consuming
+receivers must explicitly declare `owned`. Static/module entries have no receiver.
+The generated metadata exposes this as `BindingCallableContract.receiver`.
+
+Shared receivers use `&Self`; mutable receivers use `&mut Self` and require
+`in_place`. Owned receivers use `Self`, require `value_returning`, and cannot
+link to the borrowed/in-place operation lifecycle. The compiler checks the
+declared function signature against the actual method. No business type or
+method name grants consuming permission. `into_*` conversions transfer ownership;
+the trailing `_` remains reserved for in-place mutation, not consumption.
+
 ### Function status
 
 Each function has one behavior status, shared by its operation metadata and

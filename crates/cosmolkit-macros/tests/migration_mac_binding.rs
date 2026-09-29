@@ -8,6 +8,15 @@ struct Molecule {
     value: String,
 }
 
+struct Protein;
+struct BioStructure;
+
+impl Protein {
+    fn into_bio_structure(self) -> BioStructure {
+        BioStructure
+    }
+}
+
 #[derive(Clone, Copy)]
 struct BorrowedView<'a> {
     value: &'a str,
@@ -52,8 +61,14 @@ struct BindingParameterContract {
     type_name: &'static str,
     default: BindingDefault,
 }
+enum BindingReceiver {
+    Shared,
+    Mutable,
+    Owned,
+}
 struct BindingCallableContract {
     kind: BindingKind,
+    receiver: Option<BindingReceiver>,
     parameters: &'static [BindingParameterContract],
     output_type: &'static str,
     error_type: Option<&'static str>,
@@ -135,13 +150,37 @@ cosmolkit_macros::binding_contract! {
             exposure: public,
             support: supported,
             parity: not_applicable,
-            kind: instance,
+            kind: instance, receiver: owned,
             parameters: [],
             output: &str,
             error: none,
             state: value_returning,
             operation: none,
             signature: for<'a> fn(crate::BorrowedView<'a>) -> &'a str,
+        }
+    ];
+}
+
+cosmolkit_macros::binding_contract! {
+    static OWNED_PROTEIN_BINDINGS = [
+        {
+            semantic_id: "Protein.into_bio_structure",
+            item: callable,
+            owner: type_,
+            rust: crate::Protein::into_bio_structure,
+            python: "into_bio_structure",
+            javascript: "intoBioStructure",
+            feature: "bio",
+            exposure: public,
+            support: experimental,
+            parity: required_when_supported,
+            kind: instance, receiver: owned,
+            parameters: [],
+            output: crate::BioStructure,
+            error: none,
+            state: value_returning,
+            operation: none,
+            signature: fn(crate::Protein) -> crate::BioStructure,
         }
     ];
 }
@@ -294,7 +333,7 @@ fn lifetime_parameterized_type_owned_receiver_still_rejects_wrong_base_type() {
         semantic_id: "BorrowedView.value", item: callable, owner: type_,
         rust: crate::BorrowedView::value, python: "value", javascript: "value",
         feature: "test", exposure: registered, support: supported,
-        parity: not_applicable, kind: instance, parameters: [], output: &str,
+        parity: not_applicable, kind: instance, receiver: owned, parameters: [], output: &str,
         error: none, state: value_returning, operation: none,
         signature: for<'a> fn(crate::Molecule) -> &'a str,
     }"#;
@@ -643,7 +682,7 @@ fn type_owned_callables_cover_static_borrowed_mutable_and_consuming_receivers() 
         semantic_id:"MoleculeBuilder.build",item:callable,owner:type_,
         rust:crate::MoleculeBuilder::build,python:"build",javascript:"build",
         feature:"runtime",exposure:public,support:supported,parity:not_applicable,
-        kind:instance,parameters:[],output:crate::Molecule,
+        kind: instance, receiver: owned,parameters:[],output:crate::Molecule,
         error:crate::OperationError,state:value_returning,operation:none,
         signature:fn(crate::MoleculeBuilder)->Result<crate::Molecule,crate::OperationError>
     }"#;
@@ -757,25 +796,38 @@ fn bio_objects_require_inplace_suffix_and_mutable_receiver() {
 }
 
 #[test]
-fn bio_value_transforms_borrow_the_receiver_without_relaxing_other_types() {
+fn receiver_capability_is_independent_of_business_type() {
     for target in ["BioStructure", "Protein", "OtherValue"] {
         let entry = format!(
             r#"{{
-            semantic_id:"{target}.with_translation",item:callable,owner:type_,
-            rust:crate::{target}::with_translation,python:"with_translation",javascript:"withTranslation",
-            feature:"bio",exposure:public,support:experimental,parity:not_applicable,
-            kind:instance,parameters:[],output:crate::{target},error:none,
-            state:value_returning,operation:none,signature:fn(&crate::{target})->crate::{target}
+            semantic_id:"{target}.convert", item:callable, owner:type_,
+            rust:crate::{target}::convert, python:"convert", javascript:"convert",
+            feature:"bio", exposure:public, support:experimental, parity:not_applicable,
+            kind:instance, receiver:owned, parameters:[], output:crate::{target}, error:none,
+            state:value_returning, operation:none, signature:fn(crate::{target})->crate::{target}
         }}"#
         );
-        let borrowed = expand_binding_contract(registry_with(&entry));
-        let consuming = expand_binding_contract(registry_with(&entry.replace("fn(&", "fn(")));
-        if target == "OtherValue" {
-            assert!(borrowed.is_err());
-            assert!(consuming.is_ok());
-        } else {
-            assert!(borrowed.is_ok());
-            assert!(consuming.is_err());
+        assert!(expand_binding_contract(registry_with(&entry)).is_ok());
+        for invalid in [
+            entry.replace("receiver:owned", "receiver:shared"),
+            entry.replace("receiver:owned", "receiver:mutable"),
+            entry.replace("receiver:owned,", ""),
+            entry.replace("receiver:owned", "receiver:unknown"),
+            entry.replace("kind:instance", "kind:static_"),
+            entry.replace("state:value_returning", "state:read_only"),
+            entry.replace("state:value_returning", "state:in_place"),
+            entry.replace("operation:none", "operation:\"convert\""),
+            entry.replace("signature:fn(", "signature:fn(&"),
+        ] {
+            assert!(
+                expand_binding_contract(registry_with(&invalid)).is_err(),
+                "{invalid}"
+            );
         }
+        let borrowed = entry
+            .replace("receiver:owned", "receiver:shared")
+            .replace("signature:fn(", "signature:fn(&");
+        assert!(expand_binding_contract(registry_with(&borrowed)).is_ok());
     }
+    assert_eq!(OWNED_PROTEIN_BINDINGS.len(), 1);
 }

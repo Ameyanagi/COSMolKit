@@ -26,7 +26,10 @@ pub use metadata::{
     BioSoftwareClassification, BioSoftwareItem, BioTlsGroup, BioTlsSelection,
 };
 pub use protein::{
-    ProteinAtomRef, ProteinChainRef, ProteinData, ProteinProjectionError, ProteinResidueRef,
+    ProteinAtomIter, ProteinAtomRef, ProteinChainIter, ProteinChainRef, ProteinData,
+    ProteinProjectionError, ProteinResidueIter, ProteinResidueRef, ProteinSelectionSummary,
+    protein_atoms, protein_chain, protein_chains, protein_residues, protein_selection_summary,
+    validate_protein_structure,
 };
 pub use relationships::{
     AtomAddress, BioAsu, BioCisPep, BioConnection, BioConnectionKind, BioModRes, ResidueAddress,

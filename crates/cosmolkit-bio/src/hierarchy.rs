@@ -1490,6 +1490,16 @@ impl BioStructureData {
         &self.atoms
     }
     #[must_use]
+    pub fn atom_position(&self, atom: BioAtomId) -> Option<[f64; 3]> {
+        self.coordinates.positions().get(atom.index()).copied()
+    }
+    #[must_use]
+    pub fn residue_atoms(&self, residue: BioResidueId) -> Option<&[BioAtomRow]> {
+        let row = self.residues.get(residue.index())?;
+        let span = row.atom_span();
+        self.atoms.get(span.start() as usize..span.end() as usize)
+    }
+    #[must_use]
     pub fn entities(&self) -> &[BioEntityRow] {
         &self.entities
     }
@@ -1520,6 +1530,18 @@ impl BioStructureData {
     #[must_use]
     pub fn source_state(&self) -> &BioStructureSourceState {
         &self.source_state
+    }
+    /// Borrow the last identity NCS operation ID retained by the mmCIF reader.
+    #[must_use]
+    pub fn ncs_oper_identity_id(&self) -> Option<&str> {
+        // Gemmi✔️✔️:             st.info["_struct_ncs_oper.id"] = op.str(12);
+        // Behavior: identity IDs reside in the existing source map; the
+        // reader overwrites this one key for each later identity row.
+        // Complexity: one ordered-map lookup, no allocation or operator scan.
+        self.source_state
+            .info
+            .get("_struct_ncs_oper.id")
+            .map(String::as_str)
     }
     #[must_use]
     pub fn coordinates(&self) -> &BioCoordinateBlock {
@@ -1932,6 +1954,61 @@ impl fmt::Display for BioStructureError {
 }
 
 impl std::error::Error for BioStructureError {}
+
+#[cfg(test)]
+mod bio_legacy_n01_tests {
+    use super::{
+        BioCoordinateBlock, BioCoordinateFormat, BioMetadata, BioStructureData, BioStructureParts,
+        BioStructureSourceState,
+    };
+
+    #[test]
+    fn bio_legacy_n01_identity_id_borrows_existing_source_map() {
+        let mut parts = BioStructureParts {
+            input_format: BioCoordinateFormat::Mmcif,
+            models: vec![],
+            chains: vec![],
+            residues: vec![],
+            atoms: vec![],
+            entities: vec![],
+            connections: vec![],
+            cispeps: vec![],
+            mod_residues: vec![],
+            helices: vec![],
+            sheets: vec![],
+            metadata: BioMetadata::default(),
+            source_state: BioStructureSourceState::default(),
+            coordinates: BioCoordinateBlock::default(),
+            crystal: None,
+            ncs_operators: vec![],
+            assemblies: vec![],
+        };
+        assert_eq!(
+            BioStructureData::from_parts(parts.clone())
+                .unwrap()
+                .ncs_oper_identity_id(),
+            None
+        );
+        for value in ["", "identity-last"] {
+            parts
+                .source_state
+                .info
+                .insert("_struct_ncs_oper.id".into(), value.into());
+            parts
+                .source_state
+                .info
+                .insert("unrelated".into(), "kept".into());
+            let data = BioStructureData::from_parts(parts.clone()).unwrap();
+            assert_eq!(data.ncs_oper_identity_id(), Some(value));
+            assert_eq!(data.source_state().info["_struct_ncs_oper.id"], value);
+            assert_eq!(data.source_state().info["unrelated"], "kept");
+            assert_eq!(
+                data.ncs_oper_identity_id().unwrap().as_ptr(),
+                data.source_state().info["_struct_ncs_oper.id"].as_ptr()
+            );
+        }
+    }
+}
 
 #[cfg(test)]
 mod crystal_transition_tests {

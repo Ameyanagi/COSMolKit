@@ -1,9 +1,15 @@
 //! File-format IO over detached `cosmolkit-model` values.
 
 #[cfg(feature = "bio")]
+mod bio_chemcomp;
+#[cfg(feature = "bio")]
 mod bio_mmcif;
 #[cfg(feature = "bio")]
 mod bio_pdb;
+#[cfg(feature = "bio")]
+mod bio_read;
+#[cfg(feature = "bio")]
+mod bio_write;
 #[cfg(feature = "bio")]
 #[doc(hidden)]
 pub mod cif;
@@ -20,6 +26,10 @@ pub mod xyz;
 pub use bio_mmcif::{BioMmcifReadError, BioMmcifReadStage, read_mmcif_bio_structure};
 #[cfg(feature = "bio")]
 pub use bio_pdb::{BioPdbReadError, BioPdbReadParams, BioPdbReadStage, read_pdb_bio_structure};
+#[cfg(feature = "bio")]
+pub use bio_read::{BioReadError, BioReadParams, read_bio_structure, read_bio_structure_file};
+#[cfg(feature = "bio")]
+pub use bio_write::{BioMmcifWriteError, BioMmcifWriteParams};
 pub use mol_post::{MolPostError, MolPostParams, finish_mol_block_record};
 pub use mol2::{
     Mol2ReadError, Mol2ReadParams, Mol2Record, Mol2Type, read_mol2_detached,

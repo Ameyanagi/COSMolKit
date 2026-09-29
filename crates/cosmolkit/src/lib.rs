@@ -32,23 +32,25 @@ mod strict;
 pub use binding_contract::{
     BINDING_CONTRACT, BindingCallableContract, BindingContractEntry, BindingDefault,
     BindingExposure, BindingItem, BindingKind, BindingOwner, BindingParameterContract,
-    BindingParity, BindingSupport, BindingTypeRole, StateModel,
+    BindingParity, BindingReceiver, BindingSupport, BindingTypeRole, StateModel,
 };
 #[cfg(feature = "bio")]
-pub mod bio;
+mod bio;
 #[cfg(feature = "bio")]
 pub use bio::{BioOperationError, BioStructure, Protein, ProteinReadError};
 #[cfg(feature = "bio")]
 pub use cosmolkit_bio::{
     AltLocLabel, AltLocRequest, AtomName, AtomSourceIds, BioAltLocGroupId, BioAssembly,
     BioAssemblyGenerator, BioAssemblyId, BioAssemblyOperator, BioAssemblySpecialKind, BioAtomId,
-    BioAtomRow, BioCalcFlag, BioChainId, BioChainRow, BioCoordinateBlock, BioCoordinateFormat,
-    BioCrystalCell, BioCrystalInfo, BioEntityDbRef, BioEntityId, BioEntityRow, BioModelId,
-    BioModelRow, BioNcsOperator, BioResidueId, BioResidueRow, BioRowSpan, BioSiftsUnpResidue,
-    BioStructureError, BioStructureParts, BioTransform, ChainKind, ChainSourceIds, EntityKind,
-    EntitySourceIds, PdbAtomSerial, PdbChainId, PdbSeqId, PolymerKind, ProteinAtomRef,
-    ProteinChainRef, ProteinProjectionError, ProteinResidueRef, ResidueCode, ResidueInfo,
-    ResidueInfoKind, ResidueKind, ResidueName, ResidueSequenceError, ResidueSourceIds,
+    BioAtomRow, BioCalcFlag, BioChainId, BioChainRow, BioCisPep, BioConnection, BioCoordinateBlock,
+    BioCoordinateFormat, BioCrystalCell, BioCrystalInfo, BioEntityDbRef, BioEntityId, BioEntityRow,
+    BioHelix, BioMetadata, BioModRes, BioModelId, BioModelRow, BioNcsOperator, BioResidueId,
+    BioResidueRow, BioRowSpan, BioSheet, BioSiftsUnpResidue, BioStructureError, BioStructureParts,
+    BioStructureSourceState, BioTransform, ChainKind, ChainSourceIds, EntityKind, EntitySourceIds,
+    PdbAtomSerial, PdbChainId, PdbSeqId, PolymerKind, ProteinAtomIter, ProteinAtomRef,
+    ProteinChainIter, ProteinChainRef, ProteinProjectionError, ProteinResidueIter,
+    ProteinResidueRef, ProteinSelectionSummary, ResidueCode, ResidueInfo, ResidueInfoKind,
+    ResidueKind, ResidueName, ResidueSequenceError, ResidueSourceIds,
     UNKNOWN_TABULATED_RESIDUE_INDEX, expand_one_letter, expand_one_letter_sequence,
     find_residue_info, find_residue_info_index, residue_code, residue_info, residue_info_checked,
 };
@@ -80,6 +82,7 @@ pub use cosmolkit_core::{ValenceError, ValenceModel, ValenceParams};
 #[cfg(feature = "bio")]
 pub use cosmolkit_io::{
     BioMmcifReadError, BioMmcifReadStage, BioPdbReadError, BioPdbReadParams, BioPdbReadStage,
+    BioReadError, BioReadParams,
 };
 pub use cosmolkit_model as model;
 pub use cosmolkit_model::*;
