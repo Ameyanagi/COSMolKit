@@ -8599,6 +8599,24 @@ mod tests {
     }
 
     #[test]
+    fn inchi_compatibility_long_malformed_input_preserves_syntax_error() {
+        let mut input = b"InChI=1S/CH4/h1H4".to_vec();
+        input.resize(2 * 1024 * 1024, b' ');
+        input.push(0);
+        let mut heap = SourceHeap::default();
+        let mut engine = SourceInchiStructureEngine::new(&mut heap);
+        let output = engine.get_struct_from_inchi(&input).unwrap();
+        assert_eq!(output.return_code, 2);
+        assert!(output.atoms.is_empty());
+        assert!(
+            output
+                .log
+                .unwrap()
+                .ends_with(b"Structure: 1 Syntax error (-2) in MOBILE_H (2)")
+        );
+    }
+
+    #[test]
     fn inchi_compatibility_unknown_stereo_emits_an_explicit_record() {
         for order in [BondType::Single, BondType::Double] {
             for reversed in [false, true] {

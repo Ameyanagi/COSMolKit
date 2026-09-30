@@ -1001,7 +1001,15 @@ pub(crate) fn inchi_ios_print(
         if maximum_length < 0 {
             return Ok(-1);
         }
-        let additional_length = (INCHI_ADD_STR_LEN as i32).max(maximum_length);
+        // The source length estimate excludes the trailing NUL. Reserve it
+        // explicitly; vsprintf in the C implementation otherwise writes one
+        // byte beyond the allocation when a fresh buffer exceeds the chunk.
+        // INCHI❗✔️: Same output bytes and growth complexity, with a bounded terminator.
+        let additional_length = (INCHI_ADD_STR_LEN as i32).max(
+            maximum_length
+                .checked_add(1)
+                .ok_or(SourceHeapError::AllocationSizeOverflow)?,
+        );
         let new_string_length = i64::from(ios.s.nAllocatedLength)
             .checked_add(i64::from(additional_length))
             .ok_or(SourceHeapError::AllocationSizeOverflow)?;
@@ -1150,7 +1158,15 @@ pub(crate) fn inchi_ios_print_nodisplay(
         if maximum_length < 0 {
             return Ok(-1);
         }
-        let additional_length = (INCHI_ADD_STR_LEN as i32).max(maximum_length);
+        // The source length estimate excludes the trailing NUL. Reserve it
+        // explicitly; vsprintf in the C implementation otherwise writes one
+        // byte beyond the allocation when a fresh buffer exceeds the chunk.
+        // INCHI❗✔️: Same output bytes and growth complexity, with a bounded terminator.
+        let additional_length = (INCHI_ADD_STR_LEN as i32).max(
+            maximum_length
+                .checked_add(1)
+                .ok_or(SourceHeapError::AllocationSizeOverflow)?,
+        );
         let new_string_length = i64::from(ios.s.nAllocatedLength)
             .checked_add(i64::from(additional_length))
             .ok_or(SourceHeapError::AllocationSizeOverflow)?;
@@ -1301,7 +1317,15 @@ pub(crate) fn inchi_ios_eprint(
             return Ok(-1);
         }
         if ios.s.nAllocatedLength - ios.s.nUsedLength <= maximum_length {
-            let additional_length = (INCHI_ADD_STR_LEN as i32).max(maximum_length);
+            // The source length estimate excludes the trailing NUL. Reserve it
+            // explicitly; vsprintf in the C implementation otherwise writes one
+            // byte beyond the allocation when a fresh buffer exceeds the chunk.
+            // INCHI❗✔️: Same output bytes and growth complexity, with a bounded terminator.
+            let additional_length = (INCHI_ADD_STR_LEN as i32).max(
+                maximum_length
+                    .checked_add(1)
+                    .ok_or(SourceHeapError::AllocationSizeOverflow)?,
+            );
             let allocation_length = i64::from(ios.s.nAllocatedLength)
                 .checked_add(i64::from(additional_length))
                 .ok_or(SourceHeapError::AllocationSizeOverflow)?;
@@ -3695,6 +3719,68 @@ mod tests {
             b"[hidden] -17"
         );
         assert_eq!(arguments.position, 0);
+    }
+
+    #[test]
+    fn inchi_compatibility_string_streams_reserve_a_trailing_nul() {
+        type Printer = fn(
+            &mut SourceHeap,
+            Option<&mut INCHI_IOSTREAM>,
+            SourceMutPointer<FILE>,
+            SourceConstPointer<i8>,
+            &SourceVaList,
+        ) -> Result<i32, SourceHeapError>;
+        for printer in [
+            inchi_ios_print as Printer,
+            inchi_ios_print_nodisplay,
+            |heap, stream, _, format, arguments| inchi_ios_eprint(heap, stream, format, arguments),
+        ] {
+            for length in [
+                INCHI_ADD_STR_LEN as usize - 1,
+                INCHI_ADD_STR_LEN as usize,
+                INCHI_ADD_STR_LEN as usize + 1,
+                2 * 1024 * 1024,
+            ] {
+                let mut heap = SourceHeap::default();
+                let format = source_format(&mut heap, "%s");
+                let input = source_format(&mut heap, &"x".repeat(length));
+                let args = SourceVaList {
+                    arguments: vec![SourceFormatArgument::Bytes(input.as_const())],
+                    position: 0,
+                };
+                let mut stream = INCHI_IOSTREAM {
+                    type_: INCHI_IOS_TYPE_STRING as i32,
+                    ..INCHI_IOSTREAM::default()
+                };
+                assert_eq!(
+                    printer(
+                        &mut heap,
+                        Some(&mut stream),
+                        SourceMutPointer::null(),
+                        format.as_const(),
+                        &args
+                    ),
+                    Ok(length as i32)
+                );
+                let output = heap.slice(stream.s.pStr.as_const()).unwrap();
+                assert_eq!(output[length], 0);
+                assert!(output[..length].iter().all(|&byte| byte == b'x' as i8));
+                assert_eq!(stream.s.nUsedLength, length as i32);
+                assert_eq!(
+                    printer(
+                        &mut heap,
+                        Some(&mut stream),
+                        SourceMutPointer::null(),
+                        format.as_const(),
+                        &args
+                    ),
+                    Ok(length as i32)
+                );
+                let output = heap.slice(stream.s.pStr.as_const()).unwrap();
+                assert_eq!(output[2 * length], 0);
+                assert!(output[..2 * length].iter().all(|&byte| byte == b'x' as i8));
+            }
+        }
     }
 
     #[test]

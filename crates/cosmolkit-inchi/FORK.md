@@ -2,7 +2,7 @@
 
 This branch starts from upstream COSMolKit 0.3.0, commit
 `d892ec3507c5b568c5ed5d86ae44e466f7d03855`, and retains the upstream MIT license.
-It carries three corrections used by ReShiki's Rust InChI helper:
+It carries four corrections used by ReShiki's Rust InChI helper:
 
 - Restore implicit hydrogen addition for Tl through Ra from the official
   InChI 1.07.5 `ElData[].bSkipAddingH` table. The adjacent Hg and Ac ranges
@@ -15,6 +15,11 @@ It carries three corrections used by ReShiki's Rust InChI helper:
   when stereo atom annotations are absent, matching RDKit 2026.03.6 commit
   `0e0d85f4ca34aeae15dfc0f7cf5503bdb0a8e985`. Its BSD notice is retained in
   `LICENSE-RDKit`.
+
+- Reserve space for the trailing NUL in formatted string streams, preventing a
+  bounds error for inputs at or above the 32 KiB allocation chunk. This keeps
+  native syntax-error reporting for long malformed identifiers without
+  reproducing the C formatter's one-byte write beyond its allocation.
 
 Focused regressions live beside each correction. ReShiki also compares
 independently captured molecular inputs with the official InChI 1.07.5
