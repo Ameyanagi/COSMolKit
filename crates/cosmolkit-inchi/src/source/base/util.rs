@@ -1068,7 +1068,16 @@ const EL_DATA_TYPES: [i32; 122] = {
 };
 
 // Configured `ElData[].bSkipAddingH` projection from util.c:103-273.
-// The true runs are exactly Sc-Zn, Y-Cd, and La-Zz in the active table.
+// The true runs are Sc-Zn, Y-Cd, La-Hg, and Ac-Zz in the active table.
+// InChI 1.07.5 util.c: ElData rows whose bSkipAddingH is zero.
+// INCHI✔️✔️: { "Tl", 204, 205, 204.974400000, METAL2, 18,  0, {{3,5,},     {2,4,},     {1,3,},     {0,},       {0,}       }},
+// INCHI✔️✔️: { "Pb", 207, 208, 207.976627000, METAL2, 18,  0, {{2,4,6,},   {3,5},      {2,4,},     {3,},       {0,}       }},
+// INCHI✔️✔️: { "Bi", 209, 209, 208.980390000, METAL , 19,  0, {{1,3,5,7,}, {2,4,6,},   {3,5,},     {2,4,},     {3,}       }},
+// INCHI✔️✔️: { "Po", 209, 209, 208.982400000, METAL2, 20,  0, {{0,},       {1,3,5,7,}, {2,4,6,},   {3,5,},     {2,4,}     }},
+// INCHI✔️✔️: { "At", 210, 210, 209.987100000,     0 , 22,  0, {{0,},       {0,},       {1,3,5,7,}, {2,4,6},    {3,5,}     }},
+// INCHI✔️✔️: { "Rn", 222, 222, 222.017500000,     0 ,  0,  0, {{0,},       {0,},       {0,},       {0,},       {0,}       }},
+// INCHI✔️✔️: { "Fr", 223, 223, 223.019700000, METAL ,  0,  0, {{0,},       {0,},       {1,},       {0,},       {0,}       }},
+// INCHI✔️✔️: { "Ra", 226, 226, 226.025410000, METAL ,  0,  0, {{0,},       {0,},       {2,},       {1,},       {0,}       }},
 const EL_DATA_SKIP_ADDING_H: [bool; 122] = {
     let mut values = [false; 122];
     let mut index = 22;
@@ -1082,6 +1091,11 @@ const EL_DATA_SKIP_ADDING_H: [bool; 122] = {
         index += 1;
     }
     index = 58;
+    while index <= 81 {
+        values[index] = true;
+        index += 1;
+    }
+    index = 90;
     while index <= 121 {
         values[index] = true;
         index += 1;
@@ -5260,7 +5274,8 @@ mod tests {
             let expected = i32::from(
                 (21..=30).contains(&periodic_number)
                     || (39..=48).contains(&periodic_number)
-                    || (57..=120).contains(&periodic_number),
+                    || (57..=80).contains(&periodic_number)
+                    || (89..=120).contains(&periodic_number),
             );
             assert_eq!(
                 if_skip_add_H(periodic_number),
@@ -6035,6 +6050,34 @@ mod tests {
             get_atomic_mass(Some(&[b'C' as i8])),
             Err(SourceHeapError::MissingNulTerminator)
         );
+    }
+
+    #[test]
+    fn inchi_compatibility_heavy_elements_add_implicit_hydrogens() {
+        // InChI 1.07.5 ElData: neutral Tl through Ra allow automatic H;
+        // their first neutral valences are 1, 2, 3, 2, 1, 0, 1, and 2.
+        for (symbol, atomic_number, hydrogens) in [
+            (b"Tl", 81, 1),
+            (b"Pb", 82, 2),
+            (b"Bi", 83, 3),
+            (b"Po", 84, 2),
+            (b"At", 85, 1),
+            (b"Rn", 86, 0),
+            (b"Fr", 87, 1),
+            (b"Ra", 88, 2),
+        ] {
+            let name = [symbol[0] as i8, symbol[1] as i8, 0];
+            assert_eq!(if_skip_add_H(atomic_number), Ok(0));
+            assert_eq!(
+                get_num_H(Some(&name), 0, None, 0, 0, 0, 0, 0, 0, 0),
+                Ok(hydrogens),
+                "{}",
+                String::from_utf8_lossy(symbol),
+            );
+        }
+        for atomic_number in [21, 30, 39, 48, 57, 80, 89, 118] {
+            assert_eq!(if_skip_add_H(atomic_number), Ok(1));
+        }
     }
 
     #[test]

@@ -17,10 +17,10 @@ use crate::source_types::{
     tagINCHIBondStereo2D_INCHI_BOND_STEREO_SINGLE_2UP, tagINCHIBondType_INCHI_BOND_TYPE_ALTERN,
     tagINCHIBondType_INCHI_BOND_TYPE_TRIPLE, tagINCHIStereoParity0D_INCHI_PARITY_EVEN,
     tagINCHIStereoParity0D_INCHI_PARITY_NONE, tagINCHIStereoParity0D_INCHI_PARITY_ODD,
-    tagINCHIStereoParity0D_INCHI_PARITY_UNDEFINED, tagINCHIStereoType0D_INCHI_StereoType_Allene,
-    tagINCHIStereoType0D_INCHI_StereoType_DoubleBond, tagINCHIStereoType0D_INCHI_StereoType_None,
-    tagINCHIStereoType0D_INCHI_StereoType_Tetrahedral, tagRetValGetINCHI_inchi_Ret_OKAY,
-    tagRetValGetINCHI_inchi_Ret_WARNING,
+    tagINCHIStereoParity0D_INCHI_PARITY_UNDEFINED, tagINCHIStereoParity0D_INCHI_PARITY_UNKNOWN,
+    tagINCHIStereoType0D_INCHI_StereoType_Allene, tagINCHIStereoType0D_INCHI_StereoType_DoubleBond,
+    tagINCHIStereoType0D_INCHI_StereoType_None, tagINCHIStereoType0D_INCHI_StereoType_Tetrahedral,
+    tagRetValGetINCHI_inchi_Ret_OKAY, tagRetValGetINCHI_inchi_Ret_WARNING,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4892,7 +4892,7 @@ fn r_cleanup_matches(molecule: &AdapterMol) -> Vec<[u32; 5]> {
         {
             continue;
         }
-        let mut central_atoms = molecule.adjacency[query_0 as usize]
+        let central_atoms = molecule.adjacency[query_0 as usize]
             .iter()
             .filter_map(|&(neighbor, bond)| {
                 (molecule.atoms[neighbor as usize].atomic_number == 17
@@ -4901,9 +4901,8 @@ fn r_cleanup_matches(molecule: &AdapterMol) -> Vec<[u32; 5]> {
                     .then_some(neighbor)
             })
             .collect::<Vec<_>>();
-        central_atoms.sort_unstable();
         for query_1 in central_atoms {
-            let mut oxygen_atoms = molecule.adjacency[query_1 as usize]
+            let oxygen_atoms = molecule.adjacency[query_1 as usize]
                 .iter()
                 .filter_map(|&(neighbor, bond)| {
                     (neighbor != query_0
@@ -4912,7 +4911,6 @@ fn r_cleanup_matches(molecule: &AdapterMol) -> Vec<[u32; 5]> {
                         .then_some(neighbor)
                 })
                 .collect::<Vec<_>>();
-            oxygen_atoms.sort_unstable();
             for &query_2 in &oxygen_atoms {
                 if molecule.atoms[query_2 as usize].formal_charge != -1 {
                     continue;
@@ -5006,7 +5004,7 @@ pub(crate) fn r_clean_up(molecule: &mut AdapterMol) {
     // RDKit✔️❌: Default unique-by-target-atom-set and 1000-result `SubstructMatch` completes before
     // RDKit✔️❌: this function performs its retained post-match charge checks and mutations.
     // RDKit✔️❌: The dedicated safe matcher preserves source ordering but has known extra temporary
-    // RDKit✔️❌: allocation and repeated sorting compared with RDKit's substructure matcher.
+    // RDKit✔️❌: allocation compared with RDKit's substructure matcher.
     // END RDKIT ACTIVE CONFIGURATION: rCleanUp
 
     let matches = r_cleanup_matches(molecule);
@@ -5344,14 +5342,44 @@ pub(crate) fn mol_to_inchi(
           stereo0D.type = INCHI_StereoType_DoubleBond;
           stereo0DEntries.push_back(stereo0D);
         } else if (bond->getStereo() == Bond::STEREOANY) {
-          // have to treat STEREOANY separately because RDKit will clear out
-          // StereoAtoms information.
-          // Here we just change the coordinates of the two end atoms - to bring
-          // them really close - so that InChI will not try to infer stereobond
-          // info from coordinates.
+          // Collapse coordinates so InChI cannot infer stereo from geometry,
+          // and send a proper stereo0D with UNKNOWN parity so that -SUU
+          // produces the correct unknown annotation. StereoAtoms may be
+          // cleared for STEREOANY, so we find neighbors by iterating bonds.
           inchiAtoms[atomIndex1].x = inchiAtoms[atomIndex2].x;
           inchiAtoms[atomIndex1].y = inchiAtoms[atomIndex2].y;
           inchiAtoms[atomIndex1].z = inchiAtoms[atomIndex2].z;
+          int leftNbr = -1;
+          int rightNbr = -1;
+          for (const auto &nbond : m->atomBonds(m->getAtomWithIdx(atomIndex1))) {
+            auto other = nbond->getOtherAtomIdx(atomIndex1);
+            if (other != static_cast<unsigned int>(atomIndex2)) {
+              leftNbr = other;
+              break;
+            }
+          }
+          for (const auto &nbond : m->atomBonds(m->getAtomWithIdx(atomIndex2))) {
+            auto other = nbond->getOtherAtomIdx(atomIndex2);
+            if (other != static_cast<unsigned int>(atomIndex1)) {
+              rightNbr = other;
+              break;
+            }
+          }
+          if (leftNbr >= 0 && rightNbr >= 0) {
+            inchi_Stereo0D stereo0D;
+            stereo0D.parity = INCHI_PARITY_UNKNOWN;
+            stereo0D.neighbor[0] = leftNbr;
+            stereo0D.neighbor[1] = atomIndex1;
+            stereo0D.neighbor[2] = atomIndex2;
+            stereo0D.neighbor[3] = rightNbr;
+            if (!m->getBondBetweenAtoms(stereo0D.neighbor[0],
+                                        stereo0D.neighbor[1])) {
+              std::swap(stereo0D.neighbor[0], stereo0D.neighbor[3]);
+            }
+            stereo0D.central_atom = NO_ATOM;
+            stereo0D.type = INCHI_StereoType_DoubleBond;
+            stereo0DEntries.push_back(stereo0D);
+          }
         }
     
         // number of bonds
@@ -5630,6 +5658,22 @@ pub(crate) fn mol_to_inchi(
             inchi_atoms[atom_index_1 as usize].x = source[0];
             inchi_atoms[atom_index_1 as usize].y = source[1];
             inchi_atoms[atom_index_1 as usize].z = source[2];
+            // RDKit 2026.03.6 emits unknown stereo explicitly, including
+            // when StereoAtoms is empty. Adjacency retains bond insertion order.
+            // RDKit✔️✔️: The source branch is reproduced in the anchor above;
+            // both implementations stop at the first non-central neighbor.
+            let left = working.adjacency[atom_index_1 as usize]
+                .iter().find(|&&(neighbor, _)| neighbor != atom_index_2);
+            let right = working.adjacency[atom_index_2 as usize]
+                .iter().find(|&&(neighbor, _)| neighbor != atom_index_1);
+            if let (Some(&(left, _)), Some(&(right, _))) = (left, right) {
+                stereo0d_entries.push(inchi_Stereo0D {
+                    parity: tagINCHIStereoParity0D_INCHI_PARITY_UNKNOWN as i8,
+                    neighbor: [left as i16, atom_index_1 as i16, atom_index_2 as i16, right as i16],
+                    central_atom: NO_ATOM as i16,
+                    type_: tagINCHIStereoType0D_INCHI_StereoType_DoubleBond as i8,
+                });
+            }
         }
         inchi_atoms[atom_index_1 as usize].num_bonds += 1;
     }
@@ -8552,6 +8596,86 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    #[test]
+    fn inchi_compatibility_unknown_stereo_emits_an_explicit_record() {
+        for order in [BondType::Single, BondType::Double] {
+            for reversed in [false, true] {
+                let mut molecule = graph(
+                    &[(6, 0); 4],
+                    &[
+                        (0, 1, BondType::Single),
+                        (
+                            if reversed { 2 } else { 1 },
+                            if reversed { 1 } else { 2 },
+                            order,
+                        ),
+                        (2, 3, BondType::Single),
+                    ],
+                );
+                molecule.bonds[1].stereo = BondStereo::Any;
+                molecule.conformers = vec![vec![
+                    [0.0, 1.0, 2.0],
+                    [3.0, 4.0, 5.0],
+                    [6.0, 7.0, 8.0],
+                    [9.0, 10.0, 11.0],
+                ]];
+                let mut toolkit = RecordingGenerationToolkit::default();
+                let mut engine = ScriptedGenerationEngine::default();
+                let (result, _) = run_generation(&molecule, &mut toolkit, &mut engine, None);
+                assert!(result.is_ok());
+                assert_eq!(
+                    engine.seen_inputs[0].stereo0d,
+                    vec![inchi_Stereo0D {
+                        neighbor: [0, 1, 2, 3],
+                        central_atom: NO_ATOM as i16,
+                        type_: tagINCHIStereoType0D_INCHI_StereoType_DoubleBond as i8,
+                        parity: tagINCHIStereoParity0D_INCHI_PARITY_UNKNOWN as i8,
+                    }]
+                );
+                let atom = &engine.seen_inputs[0].atoms[1];
+                assert_eq!([atom.x, atom.y, atom.z], [6.0, 7.0, 8.0]);
+            }
+        }
+    }
+
+    #[test]
+    fn inchi_compatibility_cleanup_preserves_bond_insertion_order() {
+        let star = chlorine_star(3, [-1, -1, -1, -1]);
+        let bonds = [0, 3, 1, 2].map(|index| star.bonds[index].clone()).to_vec();
+        let molecule = AdapterMol::from_graph(star.atoms, bonds);
+        // RDKit SubstructMatch for this insertion order returns this mapping,
+        // even though the three final target indices are not sorted.
+        assert_eq!(r_cleanup_matches(&molecule), vec![[0, 1, 4, 2, 3]]);
+
+        let molecule = graph(
+            &[
+                (8, -1),
+                (17, 3),
+                (8, -1),
+                (8, -1),
+                (8, 0),
+                (17, 3),
+                (8, -1),
+                (8, -1),
+                (8, 0),
+            ],
+            &[
+                (0, 5, BondType::Single),
+                (0, 1, BondType::Single),
+                (1, 2, BondType::Single),
+                (1, 3, BondType::Single),
+                (1, 4, BondType::Single),
+                (5, 6, BondType::Single),
+                (5, 7, BondType::Single),
+                (5, 8, BondType::Single),
+            ],
+        );
+        assert_eq!(
+            r_cleanup_matches(&molecule),
+            vec![[0, 5, 6, 7, 8], [0, 1, 2, 3, 4]]
+        );
     }
 
     #[test]
