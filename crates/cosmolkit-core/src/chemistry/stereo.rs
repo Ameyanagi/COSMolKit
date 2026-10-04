@@ -7,7 +7,6 @@ use crate::{
     AdjacencyList, Atom, AtomId, Bond, BondId, ChiralTag, Conformer3D, Molecule, MoleculeProperties,
 };
 use std::collections::{BTreeSet, VecDeque};
-use std::ptr::NonNull;
 
 // RDKit✔️❌: constexpr auto nonTetrahedralStereoEnvVar =
 // RDKit✔️❌:     "RDK_ENABLE_NONTETRAHEDRAL_STEREO";
@@ -560,50 +559,20 @@ fn build_cip_invariants(mol: &Molecule) -> Vec<i64> {
 // RDKit✔️✔️:   int currRank = -1;
 // RDKit✔️✔️: };
 // END RDKIT CPP STRUCT SortableCIPReference
-/// Lightweight sortable wrapper that references a CIP entry and tracks rank.
-/// CIP_ENTRY ≡ Vec<i32> in Rust.
+/// Lightweight sortable wrapper that identifies a CIP table row and tracks rank.
+/// Comparisons borrow the current table separately, after row mutations finish.
 #[derive(Debug, Clone, Copy)]
 struct SortableCipRef {
-    cip: NonNull<Vec<i32>>,
     atom_idx: usize,
     curr_rank: i32,
 }
 
 impl SortableCipRef {
-    fn new(cip: &mut Vec<i32>, atom_idx: usize) -> Self {
+    fn new(atom_idx: usize) -> Self {
         Self {
-            cip: NonNull::from(cip),
             atom_idx,
             curr_rank: -1,
         }
-    }
-
-    fn cip_entry(&self) -> &[i32] {
-        // SAFETY: `iterate_cip_ranks` allocates the complete outer table
-        // before constructing these pointers and never resizes that table.
-        // Inner Vec growth does not move the Vec header referenced here, and
-        // comparisons do not overlap mutation of the referenced entry.
-        unsafe { self.cip.as_ref().as_slice() }
-    }
-}
-
-impl PartialEq for SortableCipRef {
-    fn eq(&self, other: &Self) -> bool {
-        self.cip_entry() == other.cip_entry()
-    }
-}
-
-impl Eq for SortableCipRef {}
-
-impl PartialOrd for SortableCipRef {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for SortableCipRef {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.cip_entry().cmp(other.cip_entry())
     }
 }
 
@@ -659,6 +628,7 @@ impl Ord for SortableCipRef {
 /// Iterate over sorted entries, track tied regions and assign ranks.
 fn find_segments_to_resort(
     sorted_entries: &mut [SortableCipRef],
+    cip_entries: &[Vec<i32>],
     res: &mut Vec<(usize, usize)>,
 ) -> usize {
     res.clear();
@@ -669,22 +639,15 @@ fn find_segments_to_resort(
         // behaviorally partial instead of claiming source equivalence.
         return 0;
     }
-    // SAFETY: the non-empty slice is fixed for this function. `current` and
-    // every `entry` are derived from that one allocation, and the loop never
-    // retains a Rust reference while mutating another entry. CIP comparisons
-    // only read the separately allocated entry vectors.
-    let entries = sorted_entries.as_mut_ptr();
-    let mut current = entries;
+    let mut current = 0;
     let mut running_rank = 0;
-    unsafe { (*current).curr_rank = running_rank };
+    sorted_entries[current].curr_rank = running_rank;
     let mut in_equal_section = false;
 
     for i in 1..sorted_entries.len() {
-        // SAFETY: `i < sorted_entries.len()` and `current` is either the first
-        // entry or an entry visited by an earlier iteration.
-        let entry = unsafe { entries.add(i) };
-        if unsafe { *current == *entry } {
-            unsafe { (*entry).curr_rank = running_rank };
+        if cip_entries[sorted_entries[current].atom_idx] == cip_entries[sorted_entries[i].atom_idx]
+        {
+            sorted_entries[i].curr_rank = running_rank;
             num_independent -= 1;
             if !in_equal_section {
                 in_equal_section = true;
@@ -692,19 +655,16 @@ fn find_segments_to_resort(
             }
         } else {
             running_rank += 1;
-            unsafe { (*entry).curr_rank = running_rank };
-            current = entry;
+            sorted_entries[i].curr_rank = running_rank;
+            current = i;
             if in_equal_section {
-                // SAFETY: `in_equal_section` becomes true only immediately
-                // after pushing the corresponding open segment.
-                unsafe { res.last_mut().unwrap_unchecked() }.1 = i;
+                res.last_mut().expect("open tied CIP segment").1 = i;
                 in_equal_section = false;
             }
         }
     }
     if in_equal_section {
-        // SAFETY: the same open-segment invariant applies at loop exit.
-        unsafe { res.last_mut().unwrap_unchecked() }.1 = sorted_entries.len() - 1;
+        res.last_mut().expect("open tied CIP segment").1 = sorted_entries.len() - 1;
     }
     num_independent
 }
@@ -720,14 +680,8 @@ fn find_segments_to_resort(
 // END RDKIT CPP FUNCTION recomputeRanks
 fn recompute_ranks(sorted_entries: &[SortableCipRef], ranks: &mut [u32]) {
     debug_assert!(sorted_entries.len() >= ranks.len());
-    let entries = sorted_entries.as_ptr();
-    let output = ranks.as_mut_ptr();
-    for rank in 0..ranks.len() {
-        // SAFETY: `iterate_cip_ranks` constructs one sortable entry per rank,
-        // and each entry retains its original atom index in `0..ranks.len()`.
-        // The two slices are distinct allocations and remain fixed here.
-        let entry = unsafe { &*entries.add(rank) };
-        unsafe { output.add(entry.atom_idx).write(entry.curr_rank as u32) };
+    for entry in &sorted_entries[..ranks.len()] {
+        ranks[entry.atom_idx] = entry.curr_rank as u32;
     }
 }
 
@@ -990,17 +944,18 @@ fn iterate_cip_ranks(
     let num_atoms = mol.num_atoms();
     let mut cip_entries: Vec<Vec<i32>> = (0..num_atoms).map(|_| Vec::with_capacity(16)).collect();
     let mut sortable_entries = Vec::with_capacity(num_atoms);
-    for (atom_idx, cip_entry) in cip_entries.iter_mut().enumerate() {
-        sortable_entries.push(SortableCipRef::new(cip_entry, atom_idx));
+    for atom_idx in 0..num_atoms {
+        sortable_entries.push(SortableCipRef::new(atom_idx));
     }
 
     for i in 0..num_atoms {
         cip_entries[i].push(invars[i] as i32);
     }
 
-    sortable_entries.sort();
+    sortable_entries.sort_by(|a, b| cip_entries[a.atom_idx].cmp(&cip_entries[b.atom_idx]));
     let mut needs_sorting = Vec::new();
-    let mut num_ranks = find_segments_to_resort(&mut sortable_entries, &mut needs_sorting);
+    let mut num_ranks =
+        find_segments_to_resort(&mut sortable_entries, &cip_entries, &mut needs_sorting);
     recompute_ranks(&sortable_entries, ranks);
 
     // Seed entries
@@ -1048,9 +1003,11 @@ fn iterate_cip_ranks(
         last_num_ranks = Some(num_ranks);
 
         for &(first_idx, last_idx) in &needs_sorting {
-            sortable_entries[first_idx..=last_idx].sort();
+            sortable_entries[first_idx..=last_idx]
+                .sort_by(|a, b| cip_entries[a.atom_idx].cmp(&cip_entries[b.atom_idx]));
         }
-        num_ranks = find_segments_to_resort(&mut sortable_entries, &mut needs_sorting);
+        num_ranks =
+            find_segments_to_resort(&mut sortable_entries, &cip_entries, &mut needs_sorting);
         recompute_ranks(&sortable_entries, ranks);
 
         // Truncate and store new rank
@@ -7647,18 +7604,16 @@ mod tests {
 
     #[test]
     fn find_segments_to_resort_reuses_source_result_allocation() {
-        let mut cip_entries = [vec![1], vec![1], vec![2]];
-        let mut sortable_entries: Vec<_> = cip_entries
-            .iter_mut()
-            .enumerate()
-            .map(|(atom_idx, entry)| SortableCipRef::new(entry, atom_idx))
-            .collect();
+        let cip_entries = [vec![1], vec![1], vec![2]];
+        let mut sortable_entries: Vec<_> =
+            (0..cip_entries.len()).map(SortableCipRef::new).collect();
         let mut segments = Vec::with_capacity(4);
         segments.push((usize::MAX, usize::MAX));
         let allocation = segments.as_ptr();
         let capacity = segments.capacity();
 
-        let independent = find_segments_to_resort(&mut sortable_entries, &mut segments);
+        let independent =
+            find_segments_to_resort(&mut sortable_entries, &cip_entries, &mut segments);
 
         assert_eq!(independent, 2);
         assert_eq!(segments, [(0, 2)]);
@@ -7671,20 +7626,85 @@ mod tests {
 
     #[test]
     fn recompute_ranks_writes_sorted_entries_back_by_atom_index() {
-        let mut cip_entries = [vec![2], vec![1], vec![1]];
-        let mut sortable_entries: Vec<_> = cip_entries
-            .iter_mut()
-            .enumerate()
-            .map(|(atom_idx, entry)| SortableCipRef::new(entry, atom_idx))
-            .collect();
-        sortable_entries.sort();
+        let cip_entries = [vec![2], vec![1], vec![1]];
+        let mut sortable_entries: Vec<_> =
+            (0..cip_entries.len()).map(SortableCipRef::new).collect();
+        sortable_entries.sort_by(|a, b| cip_entries[a.atom_idx].cmp(&cip_entries[b.atom_idx]));
         let mut segments = Vec::new();
-        find_segments_to_resort(&mut sortable_entries, &mut segments);
+        find_segments_to_resort(&mut sortable_entries, &cip_entries, &mut segments);
         let mut ranks = vec![u32::MAX; sortable_entries.len()];
 
         recompute_ranks(&sortable_entries, &mut ranks);
 
         assert_eq!(ranks, [1, 0, 0]);
+    }
+
+    #[test]
+    fn sortable_cip_indices_preserve_stable_ties_and_segments_after_row_growth() {
+        let mut cip_entries: Vec<Vec<i32>> = (0..4).map(|_| Vec::with_capacity(1)).collect();
+        let mut sortable_entries: Vec<_> =
+            [3, 1, 2, 0].into_iter().map(SortableCipRef::new).collect();
+        // Construct row identities first, then grow the table and rows. Sorting
+        // must borrow their current contents instead of retaining old borrows.
+        cip_entries.push(vec![99]);
+        for (row, prefix) in cip_entries[..4].iter_mut().zip([2, 1, 1, 2]) {
+            let previous_capacity = row.capacity();
+            row.push(prefix);
+            row.resize(previous_capacity + 8, 0);
+            assert!(row.capacity() > previous_capacity);
+        }
+        sortable_entries.sort_by(|a, b| cip_entries[a.atom_idx].cmp(&cip_entries[b.atom_idx]));
+        assert_eq!(
+            sortable_entries
+                .iter()
+                .map(|entry| entry.atom_idx)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 0],
+            "equal rows retain their prior order instead of using atom indices"
+        );
+        let mut segments = Vec::with_capacity(4);
+        let mut ranks = [u32::MAX; 4];
+        assert_eq!(
+            find_segments_to_resort(&mut sortable_entries, &cip_entries, &mut segments),
+            2
+        );
+        assert_eq!(segments, [(0, 2), (2, 3)]);
+        recompute_ranks(&sortable_entries, &mut ranks);
+        assert_eq!(ranks, [1, 0, 0, 1]);
+
+        // Split one prior tie after another growth, and keep the other tie equal.
+        // The source's inclusive segment end contains the next unequal row.
+        for (row, suffix) in cip_entries[..4].iter_mut().zip([3, 2, 1, 3]) {
+            let previous_capacity = row.capacity();
+            row.resize(previous_capacity + 8, suffix);
+            assert!(row.capacity() > previous_capacity);
+        }
+        for &(first, last) in &segments {
+            sortable_entries[first..=last]
+                .sort_by(|a, b| cip_entries[a.atom_idx].cmp(&cip_entries[b.atom_idx]));
+        }
+        assert_eq!(
+            sortable_entries
+                .iter()
+                .map(|entry| entry.atom_idx)
+                .collect::<Vec<_>>(),
+            [2, 1, 3, 0]
+        );
+        assert_eq!(
+            find_segments_to_resort(&mut sortable_entries, &cip_entries, &mut segments),
+            3
+        );
+        assert_eq!(segments, [(2, 3)]);
+        recompute_ranks(&sortable_entries, &mut ranks);
+        assert_eq!(ranks, [2, 1, 0, 2]);
+        sortable_entries.sort_by(|a, b| cip_entries[a.atom_idx].cmp(&cip_entries[b.atom_idx]));
+        assert_eq!(
+            sortable_entries
+                .iter()
+                .map(|entry| entry.atom_idx)
+                .collect::<Vec<_>>(),
+            [2, 1, 3, 0]
+        );
     }
 
     #[test]

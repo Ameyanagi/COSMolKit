@@ -2185,6 +2185,12 @@ fn calc_gradient_wrapper(ff: &ForceField, pos: &[f64], grad: &mut [f64]) -> f64 
     }
     // RDKit✔️✔️: mp_ffHolder->calcGrad(pos, grad);
     ff.calc_grad(pos, grad);
+    scale_gradient(grad)
+}
+
+// Reused by the owned evaluator; keep the source gradient scaling in one
+// implementation without exposing the primitive field or its owner pointers.
+pub(super) fn scale_gradient(grad: &mut [f64]) -> f64 {
     // RDKit✔️✔️: double maxGrad = -1e8;
     // RDKit✔️✔️: double gradScale = 0.1;
     let mut max_grad = -1.0e8_f64;
@@ -2221,7 +2227,7 @@ fn calc_gradient_wrapper(ff: &ForceField, pos: &[f64], grad: &mut [f64]) -> f64 
     grad_scale
 }
 
-fn bfgs_minimize<Energy, Gradient>(
+pub(super) fn bfgs_minimize<Energy, Gradient>(
     mut pos: Vec<f64>,
     grad_tol: f64,
     mut func: Energy,

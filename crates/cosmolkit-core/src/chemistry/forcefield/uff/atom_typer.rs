@@ -1,6 +1,9 @@
 //! Source-backed RDKit UFF atom typing helpers.
 
-use super::builder::{UffBuilderError, construct_force_field, select_uff_conformer_index};
+use super::builder::{
+    UffBuilderError, construct_force_field, construct_force_field_with_params,
+    select_uff_conformer_index,
+};
 use super::params::{
     AtomicParams, ParamCollection, RAD2DEG, UffAngle, UffBond, UffInv, UffParamError, UffTor,
     UffVdw,
@@ -10,6 +13,8 @@ use super::utils::{
     UffUtilsError, calc_angle_force_constant, calc_bond_force_constant, calc_bond_rest_length,
     calc_inversion_coefficients, calc_nonbonded_depth, calc_nonbonded_minimum,
 };
+use crate::chemistry::forcefield::molecular::{validate_options, validate_positions};
+use crate::chemistry::forcefield::{MolecularForceField, MolecularForceFieldError};
 use crate::chemistry::valence::{
     ValenceError, ValenceModel, assign_valence, bond_type_as_double,
     periodic_table_outer_electrons, rdkit_default_valence, rdkit_element_symbol,
@@ -36,6 +41,8 @@ pub(crate) enum UffAtomTyperError {
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum UffPublicApiError {
+    #[error(transparent)]
+    ForceField(#[from] MolecularForceFieldError),
     #[error("UFF atom index out of range: atom_index={atom_index}, atoms={atoms}")]
     InvalidAtomIndex { atom_index: usize, atoms: usize },
     #[error("RDKit UFF buildNeighborMatrix is unsupported for empty molecules")]
@@ -683,6 +690,48 @@ pub fn uff_has_all_molecule_params(mol: &Molecule) -> Result<bool, UffPublicApiE
     Ok(found_all)
     // RDKit✔️❗: }
     // END RDKIT CPP FUNCTION RDKit::UFFHasAllMoleculeParams
+}
+
+/// Build an owned, editable UFF force field without changing `mol`.
+///
+/// `None` means at least one atom lacks UFF parameters. Unlike the legacy
+/// optimizer's source-compatible partial-field behavior, this API requires all
+/// atom types and never omits terms to accommodate missing parameters. Invalid
+/// inputs return structured errors. `conf_id == -1` selects the first conformer;
+/// otherwise it selects by conformer id. A nonnegative `vdw_thresh` controls the
+/// nonbonded cutoff; positive infinity includes all pairs.
+pub fn uff_get_molecule_force_field(
+    mol: &Molecule,
+    vdw_thresh: f64,
+    conf_id: isize,
+    ignore_interfrag_interactions: bool,
+) -> Result<Option<MolecularForceField>, UffPublicApiError> {
+    validate_options(vdw_thresh, conf_id)?;
+    if mol.num_atoms() == 0 {
+        return Err(UffPublicApiError::EmptyMolecule);
+    }
+    let index = select_uff_conformer_index(mol, conf_id).map_err(public_error_from_builder)?;
+    validate_positions(mol.conformers_3d()[index].coordinates(), mol.num_atoms())?;
+    let context = uff_typing_context(mol)?;
+    let (params, found_all) = get_atom_types_for_uff(
+        mol,
+        &context.total_valences,
+        &context.hybridizations,
+        &context.atom_has_conjugated_bond,
+    )
+    .map_err(public_error_from_atom_typer)?;
+    if !found_all {
+        return Ok(None);
+    }
+    let field = construct_force_field_with_params(
+        mol,
+        &params,
+        vdw_thresh,
+        conf_id,
+        ignore_interfrag_interactions,
+    )
+    .map_err(public_error_from_builder)?;
+    Ok(Some(MolecularForceField::from_force_field(field)))
 }
 
 #[doc(hidden)]

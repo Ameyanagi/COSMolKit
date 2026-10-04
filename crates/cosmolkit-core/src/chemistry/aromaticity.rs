@@ -1277,9 +1277,12 @@ fn set_mmff_aromaticity_from_parts(
         }
     }
 
-    // Build aromaticity assignment
-    let mut atom_aromatic = vec![false; num_atoms];
-    let mut bond_aromatic = vec![false; bonds.len()];
+    // Build the assignment from the current flags. setMMFFAromaticity only
+    // adds aromatic flags; rings not newly perceived do not clear prior flags.
+    // RDKit✔️✔️:           atom->setIsAromatic(true);
+    // RDKit✔️✔️:       bond->setIsAromatic(true);
+    let mut atom_aromatic = current_atom_aromatic;
+    let mut bond_aromatic = bonds.iter().map(Bond::is_aromatic).collect::<Vec<_>>();
     let mut aromatic_ring_count = 0usize;
 
     // Mark bonds as aromatic for each aromatic ring

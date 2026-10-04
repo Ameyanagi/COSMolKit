@@ -12,6 +12,8 @@ use super::params::{
     MmffTorCollection, MmffVdw, MmffVdwCollection, MmffVdwRijstarEps, default_mmff_bndk_params,
     default_mmff_cov_rad_pau_ele_params, default_mmff_herschbach_laurie_params,
 };
+use crate::chemistry::forcefield::molecular::{validate_options, validate_positions};
+use crate::chemistry::forcefield::{MolecularForceField, MolecularForceFieldError};
 use crate::chemistry::valence::{ValenceError, ValenceModel, assign_valence};
 use crate::rings::{RingFindingError, symmetrize_sssr};
 use crate::{
@@ -133,6 +135,8 @@ pub enum MmffMolPropertiesError {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum MmffPublicApiError {
     #[error(transparent)]
+    ForceField(#[from] MolecularForceFieldError),
+    #[error(transparent)]
     MolProperties(#[from] MmffMolPropertiesError),
     #[error(transparent)]
     Builder(#[from] MmffBuilderError),
@@ -244,6 +248,41 @@ pub fn mmff_has_all_molecule_params(mol: &Molecule) -> Result<bool, MmffMolPrope
     }
     // RDKit✔️❗: }
     // END RDKIT CPP FUNCTION RDKit::MMFFHasAllMoleculeParams
+}
+
+/// Build an owned, editable MMFF force field without changing `mol`.
+///
+/// `None` means the molecule lacks complete MMFF parameters. Unsupported
+/// chemistry and malformed inputs return structured errors. The exact requested
+/// variant is used; no UFF fallback or partial field is constructed. Coordinates
+/// are copied from the conformer whose id is `conf_id` (`-1` selects the first).
+/// `non_bonded_thresh` is nonnegative; positive infinity includes all pairs.
+/// All enabled terms and the MMFF-prepared graph come from [`MmffMolProperties`].
+pub fn mmff_get_molecule_force_field(
+    mol: &Molecule,
+    variant: MmffVariant,
+    non_bonded_thresh: f64,
+    conf_id: isize,
+    ignore_interfrag_interactions: bool,
+) -> Result<Option<MolecularForceField>, MmffPublicApiError> {
+    validate_options(non_bonded_thresh, conf_id)?;
+    if mol.num_atoms() == 0 {
+        return Err(MmffBuilderError::EmptyMolecule.into());
+    }
+    let index = select_mmff_conformer_index(mol, conf_id)?;
+    validate_positions(mol.conformers_3d()[index].coordinates(), mol.num_atoms())?;
+    let properties = MmffMolProperties::new(mol, variant.as_rdkit_str(), MMFF_VERBOSITY_NONE)?;
+    if !properties.is_valid() {
+        return Ok(None);
+    }
+    let field = construct_force_field_with_props(
+        &properties.molecule,
+        &properties,
+        non_bonded_thresh,
+        conf_id,
+        ignore_interfrag_interactions,
+    )?;
+    Ok(Some(MolecularForceField::from_force_field(field)))
 }
 
 #[doc(hidden)]
