@@ -173,25 +173,25 @@ pub use chemistry::forcefield::mmff::{
     MmffOptimizeMoleculeConfResult, MmffOptimizeMoleculeConfsResult, MmffOptimizeMoleculeResult,
     MmffParamError, MmffPbci, MmffPbciCollection, MmffProp, MmffPropCollection, MmffPublicApiError,
     MmffStbn, MmffStbnCollection, MmffTor, MmffTorCollection, MmffVariant, MmffVdw,
-    MmffVdwCollection, MmffVdwRijstarEps, mmff_has_all_molecule_params,
-    mmff_initial_gradient_for_parity, mmff_optimize_molecule, mmff_optimize_molecule_confs,
-    mmff_sanitize_ops, sanitize_mmff_mol,
+    MmffVdwCollection, MmffVdwRijstarEps, mmff_get_molecule_force_field,
+    mmff_has_all_molecule_params, mmff_initial_gradient_for_parity, mmff_optimize_molecule,
+    mmff_optimize_molecule_confs, mmff_sanitize_ops, sanitize_mmff_mol,
 };
 pub use chemistry::forcefield::uff::{
     UffAngle, UffBond, UffInv, UffOptimizeMoleculeConfResult, UffOptimizeMoleculeConfsResult,
     UffOptimizeMoleculeResult, UffPublicApiError, UffTor, UffVdw, get_uff_angle_bend_params,
     get_uff_bond_stretch_params, get_uff_inversion_params, get_uff_torsion_params,
-    get_uff_vdw_params, uff_has_all_molecule_params, uff_initial_gradient_for_parity,
-    uff_optimize_molecule, uff_optimize_molecule_confs,
+    get_uff_vdw_params, uff_get_molecule_force_field, uff_has_all_molecule_params,
+    uff_initial_gradient_for_parity, uff_optimize_molecule, uff_optimize_molecule_confs,
 };
 pub use chemistry::forcefield::{
     AngleConstraintContrib, AngleConstraintContribs, AngleConstraintContribsParams, DihedralOutput,
     DistanceConstraintContrib, DistanceConstraintContribs, DistanceConstraintContribsParams,
-    ForceField, ForceFieldContrib, ForceFieldSnapshot, ForceFieldVec3, PositionConstraintContrib,
-    TorsionAngleContribM6, TorsionAngleContribs, TorsionAngleContribsParams,
-    TorsionConstraintContrib, calc_torsion_energy, calc_torsion_energy_m6,
-    compute_dihedral_from_flat, compute_dihedral_from_points, compute_dihedral_from_position_vec,
-    normalize_angle_deg,
+    ForceField, ForceFieldContrib, ForceFieldSnapshot, ForceFieldVec3, MolecularForceField,
+    MolecularForceFieldError, PositionConstraintContrib, TorsionAngleContribM6,
+    TorsionAngleContribs, TorsionAngleContribsParams, TorsionConstraintContrib,
+    calc_torsion_energy, calc_torsion_energy_m6, compute_dihedral_from_flat,
+    compute_dihedral_from_points, compute_dihedral_from_position_vec, normalize_angle_deg,
 };
 pub use chemistry::tautomer::{
     TautomerCanonicalizationError, TautomerCatalog, TautomerCatalogError, TautomerEnumeration,

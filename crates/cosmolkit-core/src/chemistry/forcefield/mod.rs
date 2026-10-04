@@ -3,6 +3,8 @@
 pub(crate) mod core;
 pub(crate) mod crystalff;
 pub mod mmff;
+mod molecular;
+mod owned;
 pub(crate) mod torsion_query;
 pub mod uff;
 
@@ -17,6 +19,8 @@ pub use crystalff::{
     TorsionAngleContribM6, TorsionAngleContribs, TorsionAngleContribsParams, calc_torsion_energy,
     calc_torsion_energy_m6,
 };
+pub use molecular::{MolecularForceField, MolecularForceFieldError};
+pub(crate) use owned::OwnedForceField;
 
 pub(crate) fn optimize_molecule_confs_non_threaded<R>(
     molecule: &mut crate::Molecule,
