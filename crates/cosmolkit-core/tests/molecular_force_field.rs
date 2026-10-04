@@ -1,7 +1,8 @@
 use cosmolkit_core::{
-    AtomSpec, BondOrder, BondSpec, Conformer3D, Element, Hybridization, MmffPublicApiError,
-    MmffVariant, MolecularForceField, MolecularForceFieldError, Molecule, MoleculeBuilder,
-    UffPublicApiError, mmff_get_molecule_force_field, uff_get_molecule_force_field,
+    AtomSpec, BondOrder, BondSpec, Conformer3D, Element, Hybridization, MmffMolProperties,
+    MmffPublicApiError, MmffVariant, MolecularForceField, MolecularForceFieldError, Molecule,
+    MoleculeBuilder, UffPublicApiError, mmff_get_molecule_force_field,
+    uff_get_molecule_force_field,
 };
 
 fn ethanol() -> Molecule {
@@ -136,6 +137,134 @@ fn factories_require_complete_parameters_and_never_return_partial_fields() {
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn repeated_mmff_preparation_preserves_aromatic_types_and_same_xyz_force_field() {
+    for (smiles, aromatic) in [("c1ccccc1", true), ("c1ccc2ccccc2c1", true), ("CCO", false)] {
+        let mol = Molecule::from_smiles(smiles)
+            .unwrap()
+            .with_hydrogens()
+            .unwrap();
+        // Use fixed finite, noncoincident XYZ so the two factory paths evaluate
+        // identical geometry without another conformer-generation dependency.
+        let coordinates: Vec<_> = (0..mol.num_atoms())
+            .map(|i| {
+                [
+                    (i % 5) as f64 * 1.2,
+                    (i / 5) as f64 * 1.3,
+                    ((i * i) % 7) as f64 * 0.23,
+                ]
+            })
+            .collect();
+        let mut builder = mol.to_builder();
+        builder.add_3d_conformer(coordinates.clone()).unwrap();
+        let mol = builder.build().unwrap();
+        let original = mol.clone();
+
+        for variant in [MmffVariant::Mmff94, MmffVariant::Mmff94s] {
+            let first = MmffMolProperties::new(&mol, variant.as_rdkit_str(), 0).unwrap();
+            assert!(first.is_valid(), "{smiles}/{variant:?}");
+            assert!(first.molecule.prop("_MMFFSanitized").is_some());
+            let first_snapshot = first.molecule.clone();
+            let repeated =
+                MmffMolProperties::new(&first.molecule, variant.as_rdkit_str(), 0).unwrap();
+            assert!(repeated.is_valid(), "repeated {smiles}/{variant:?}");
+            assert_eq!(first.molecule, first_snapshot);
+            assert_eq!(first.atom_properties, repeated.atom_properties);
+            assert_eq!(first.aromaticity, repeated.aromaticity);
+            assert_eq!(first.molecule.conformers_3d()[0].coordinates(), coordinates);
+            assert_eq!(
+                repeated.molecule.conformers_3d()[0].coordinates(),
+                coordinates
+            );
+
+            for (idx, atom) in first.molecule.atoms().iter().enumerate() {
+                let expected_aromatic = aromatic && atom.atomic_number() == 6;
+                assert_eq!(atom.is_aromatic(), expected_aromatic);
+                assert_eq!(
+                    repeated.molecule.atoms()[idx].is_aromatic(),
+                    expected_aromatic
+                );
+                assert_eq!(
+                    first.get_mmff_partial_charge(idx).unwrap(),
+                    repeated.get_mmff_partial_charge(idx).unwrap()
+                );
+                if aromatic {
+                    let expected_type = if atom.atomic_number() == 6 { 37 } else { 5 };
+                    assert_eq!(first.get_mmff_atom_type(idx).unwrap(), expected_type);
+                    assert_eq!(repeated.get_mmff_atom_type(idx).unwrap(), expected_type);
+                }
+            }
+            for (idx, bond) in first.molecule.bonds().iter().enumerate() {
+                let expected_aromatic = aromatic
+                    && first.molecule.atoms()[bond.begin().index()].atomic_number() == 6
+                    && first.molecule.atoms()[bond.end().index()].atomic_number() == 6;
+                assert_eq!(bond.is_aromatic(), expected_aromatic);
+                assert_eq!(
+                    repeated.molecule.bonds()[idx].is_aromatic(),
+                    expected_aromatic
+                );
+                assert_eq!(bond.order(), repeated.molecule.bonds()[idx].order());
+            }
+            if aromatic {
+                let (bond_type, parameters) =
+                    first.get_mmff_bond_stretch_params(0, 1).unwrap().unwrap();
+                assert_eq!(bond_type, 0);
+                assert_eq!((parameters.kb, parameters.r0), (5.573, 1.374));
+                assert_eq!(
+                    repeated.get_mmff_bond_stretch_params(0, 1).unwrap(),
+                    first.get_mmff_bond_stretch_params(0, 1).unwrap()
+                );
+            }
+
+            let mut direct = mmff_get_molecule_force_field(&mol, variant, f64::INFINITY, -1, true)
+                .unwrap()
+                .unwrap();
+            assert_eq!(direct.positions(), coordinates);
+            let direct_energy = direct.energy();
+            assert!(direct_energy.is_finite());
+            let direct_gradient = direct.gradient();
+            assert!(
+                direct_gradient
+                    .iter()
+                    .flatten()
+                    .all(|value| value.is_finite())
+            );
+            // These include the adapter's preparation-then-factory path. Each
+            // factory prepares an already _MMFFSanitized graph one more time.
+            for prepared_molecule in [&first.molecule, &repeated.molecule] {
+                let mut prepared = mmff_get_molecule_force_field(
+                    prepared_molecule,
+                    variant,
+                    f64::INFINITY,
+                    -1,
+                    true,
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(prepared.positions(), coordinates);
+                let prepared_energy = prepared.energy();
+                assert!(prepared_energy.is_finite());
+                assert_eq!(
+                    direct_energy, prepared_energy,
+                    "energy {smiles}/{variant:?}"
+                );
+                let prepared_gradient = prepared.gradient();
+                assert!(
+                    prepared_gradient
+                        .iter()
+                        .flatten()
+                        .all(|value| value.is_finite())
+                );
+                assert_eq!(
+                    direct_gradient, prepared_gradient,
+                    "gradient {smiles}/{variant:?}"
+                );
+            }
+            assert_eq!(mol, original);
+        }
+    }
 }
 
 #[test]
